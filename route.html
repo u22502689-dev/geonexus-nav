@@ -4,95 +4,19 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>GEONEXUS | 2D Route</title>
+<link rel="icon" type="image/png" href="G-logo.png">
+<link rel="stylesheet" href="route.css" />
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
-<style>
-  :root {
-    --bg: #05070d;
-    --panel: #0b1322;
-    --text: #e6edf5;
-    --muted: #9fb3c8;
-    --accent: #23b5a4;
-    --accent-bright: #48e5c2;
-    --danger: #ff6b6b;
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
-  body {
-    display: flex;
-    flex-direction: column;
-    background: var(--bg);
-    color: var(--text);
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  }
-  header {
-    padding: 12px 16px;
-    border-bottom: 1px solid rgba(35, 181, 164, 0.4);
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  header h1 { margin: 0; font-size: 1.1rem; letter-spacing: 4px; color: var(--accent-bright); }
-  header span { font-size: 0.8rem; color: var(--muted); }
-  .controls {
-    display: grid;
-    grid-template-columns: 1fr 1fr auto;
-    gap: 10px;
-    align-items: end;
-    padding: 12px 16px;
-    background: var(--panel);
-  }
-  .controls label { display: block; font-size: 0.7rem; letter-spacing: 1px; color: var(--accent); margin-bottom: 4px; }
-  .controls select {
-    width: 100%;
-    padding: 9px;
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid rgba(35, 181, 164, 0.5);
-    border-radius: 6px;
-    font-size: 0.95rem;
-  }
-  button {
-    padding: 10px 16px;
-    border: 0;
-    border-radius: 6px;
-    background: var(--accent-bright);
-    color: var(--bg);
-    font-weight: 700;
-    cursor: pointer;
-    font-size: 0.9rem;
-  }
-  button:hover { filter: brightness(1.1); }
-  button.danger { background: var(--danger); }
-  button[hidden] { display: none; }
-  #status { padding: 8px 16px; min-height: 2em; font-size: 0.9rem; color: var(--accent-bright); }
-  #status.error { color: #ff9a9a; }
-  #map { flex: 1; min-height: 300px; background: #0a0f1a; }
-  .summary {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 1px;
-    background: rgba(35, 181, 164, 0.3);
-    border-top: 1px solid rgba(35, 181, 164, 0.4);
-  }
-  .summary div { background: var(--panel); padding: 10px 14px; }
-  .summary small { display: block; font-size: 0.65rem; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; }
-  .summary strong { display: block; margin-top: 2px; font-size: 0.95rem; word-break: break-word; }
-  .end-row { padding: 10px 16px; text-align: center; background: var(--panel); }
-  .end-row button { width: 100%; max-width: 360px; padding: 14px; }
-  .leaflet-tooltip.label-start { background: #16a34a; color: #fff; border: 0; font-weight: 700; }
-  .leaflet-tooltip.label-end { background: #dc2626; color: #fff; border: 0; font-weight: 700; }
-  @media (max-width: 640px) {
-    .controls { grid-template-columns: 1fr; }
-    .summary { grid-template-columns: 1fr; }
-  }
-</style>
+
 </head>
 <body>
   <header>
-    <h1>GEONEXUS</h1>
-    <span>Campus route</span>
-  </header>
+     <div class="brand">
+       <img src="G-logo.png" alt="GeoNexus logo" class="brand-logo">
+       <h1>GEONEXUS</h1>
+     </div>
+     <span>Campus route</span>
+   </header>
 
   <form class="controls" id="routeForm">
     <div>
