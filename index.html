@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GEONEXUS | Campus Navigation</title>
+
+<link
+rel="stylesheet"
+href="https://cesium.com/downloads/cesiumjs/releases/1.123/Build/Cesium/Widgets/widgets.css"
+/>
+<link rel="stylesheet" href="style.css" />
+<style>
+  #qrBox { margin-top: 12px; text-align: center; }
+  #qrBox[hidden] { display: none; }
+  #qrcode { display: inline-block; padding: 10px; background: #fff; border-radius: 6px; }
+  #qrcode img, #qrcode canvas { display: block; }
+  #qrHint { margin: 8px 0 4px; font-size: 12px; }
+  #qrWarn { margin: 6px 0 0; font-size: 12px; color: #ff9a9a; }
+  #qrLink { font-size: 11px; word-break: break-all; }
+</style>
+</head>
+<body>
+<div id="cesiumContainer"></div>
+
+<div id="panel">
+<h1>Campus 3D</h1>
+
+<label>
+<input type="checkbox" id="tglBuildings" checked />
+      Buildings
+</label>
+
+<label>
+<input type="checkbox" id="tglPaths" checked />
+      Pathways
+</label>
+
+<label>
+<input type="checkbox" id="tglAoi" checked />
+      Campus boundary
+</label>
+
+<button id="btnHome" type="button">Zoom to campus</button>
+
+<hr />
+
+<h2>Campus Navigation</h2>
+
+<label for="startBuilding">Starting building</label>
+<select id="startBuilding">
+<option value="">Select starting building</option>
+</select>
+
+<button id="pickStart" type="button">Pick Start on Model</button>
+
+<label for="endBuilding">Destination building</label>
+<select id="endBuilding">
+<option value="">Select destination building</option>
+</select>
+
+<button id="pickEnd" type="button">Pick Destination on Model</button>
+
+<button id="findRoute" type="button">Find Route</button>
+<button id="resetRoute" class="secondary" type="button">
+      Clear Route
+</button>
+
+<div id="routeStatus" role="status" aria-live="polite">
+      Select a starting building and destination.
+</div>
+
+<!-- QR code: appears after a route is found -->
+<div id="qrBox" hidden>
+<div id="qrcode"></div>
+<div id="qrHint">Scan with your phone to open this route on the 2D map.</div>
+<div id="qrWarn" hidden></div>
+<a id="qrLink" href="#" target="_blank" rel="noopener"></a>
+</div>
+
+<hr />
+
+<div id="info">Click a building to see its attributes.</div>
+</div>
+
+<div id="tooltip"></div>
+
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.123/Build/Cesium/Cesium.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="config.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
