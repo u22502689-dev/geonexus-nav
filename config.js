@@ -6,7 +6,7 @@
 // the 3D page is opened from the public site (NOT localhost / file://), otherwise
 // the QR code will point at an address phones cannot reach.
 window.GEONEXUS = {
-  PUBLIC_BASE_URL: "",
+  PUBLIC_BASE_URL: "https://u22502689-dev.github.io/geonexus-nav/",
   ROUTE_PAGE: "route.html",
   BUILDINGS_URL: "Buildings.geojson",
   PATHWAYS_URL: "Pathways.geojson",
