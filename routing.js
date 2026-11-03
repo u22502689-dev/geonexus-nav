@@ -259,7 +259,7 @@ window.PathRouter = (function () {
 
 
 // ==========================================
-// 2D MAP CONTROLLER & UI
+// 2D MAP CONTROLLER & UI WITH LIVE GPS
 // ==========================================
 
 (function () {
@@ -268,6 +268,7 @@ window.PathRouter = (function () {
   const CFG = window.GEONEXUS || {};
   const DATA_CFG = CFG.DATA || {};
   const ROUTING_CFG = CFG.ROUTING || {};
+  const GPS_START_ID = "USER_GPS_LOCATION";
   const $ = (id) => document.getElementById(id);
 
   const setStatus = (msg, isError) => {
@@ -290,23 +291,36 @@ window.PathRouter = (function () {
   const map = L.map("map", { zoomControl: true }).setView([-25.7545, 28.2315], 17);
 
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19,
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-}).addTo(map);
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
 
   const layers = {
     aoi: L.layerGroup().addTo(map),
     buildings: L.layerGroup().addTo(map),
     paths: L.layerGroup().addTo(map),
-    route: L.layerGroup().addTo(map)
+    route: L.layerGroup().addTo(map),
+    userLocation: L.layerGroup().addTo(map)
   };
 
   let network = null;
   let screens = [];
   let entrances = [];
 
+  // Mobile Geolocation State
+  let userCoords = null; // Stores latest [lng, lat]
+  let watchId = null;
+
   function findItem(list, param) {
     if (param === null || param === undefined || param === "") return null;
+    if (param === GPS_START_ID) {
+      if (!userCoords) return null;
+      return {
+        id: GPS_START_ID,
+        name: "My Current Location",
+        coordinates: userCoords
+      };
+    }
     const q = String(param).trim();
     return (
       list.find((item) => String(item.id) === q) ||
@@ -315,13 +329,21 @@ window.PathRouter = (function () {
     );
   }
 
-  function fillSelect(sel, list, placeholder) {
+  function fillSelect(sel, list, placeholder, includeGpsOption = false) {
     if (!sel) return;
     sel.replaceChildren();
     const ph = document.createElement("option");
     ph.value = "";
     ph.textContent = placeholder;
     sel.appendChild(ph);
+
+    if (includeGpsOption) {
+      const gpsOpt = document.createElement("option");
+      gpsOpt.value = GPS_START_ID;
+      gpsOpt.textContent = "📍 My Current Location";
+      sel.appendChild(gpsOpt);
+    }
+
     [...list]
       .sort((a, b) => a.name.localeCompare(b.name))
       .forEach((item) => {
@@ -340,6 +362,86 @@ window.PathRouter = (function () {
       url.searchParams.set("d", d);
     }
     history.replaceState(null, "", url.toString());
+  }
+
+  function startLocationTracking(autoRouteTargetDest = null) {
+    if (!("geolocation" in navigator)) {
+      setStatus("Geolocation is not supported by your browser.", true);
+      return;
+    }
+
+    if (watchId !== null) return; // Already watching
+
+    setStatus("Acquiring GPS position...");
+
+    watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const accuracy = position.coords.accuracy;
+
+        userCoords = [lng, lat];
+        layers.userLocation.clearLayers();
+
+        // Accuracy radius blue circle
+        L.circle([lat, lng], {
+          radius: accuracy,
+          color: "#3b82f6",
+          fillColor: "#3b82f6",
+          fillOpacity: 0.15,
+          weight: 1,
+          interactive: false
+        }).addTo(layers.userLocation);
+
+        // Marker for user position
+        L.circleMarker([lat, lng], {
+          radius: 8,
+          color: "#ffffff",
+          weight: 2,
+          fillColor: "#2563eb",
+          fillOpacity: 1
+        }).bindTooltip("Your Location", { direction: "top", offset: [0, -10] })
+          .addTo(layers.userLocation);
+
+        // Dynamic re-route if navigating from Current Location
+        const startSelect = $("selStart");
+        const endSelect = $("selDest");
+
+        if (startSelect && startSelect.value === GPS_START_ID) {
+          const dest = autoRouteTargetDest || (endSelect ? findItem(entrances, endSelect.value) : null);
+          if (dest) {
+            const userStart = {
+              id: GPS_START_ID,
+              name: "My Current Location",
+              coordinates: userCoords
+            };
+            showRoute(userStart, dest);
+          }
+        }
+      },
+      (err) => {
+        const msgs = {
+          1: "Location permission denied.",
+          2: "GPS position unavailable.",
+          3: "GPS request timed out."
+        };
+        setStatus(msgs[err.code] || "Location tracking error.", true);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 2000,
+        timeout: 10000
+      }
+    );
+  }
+
+  function stopLocationTracking() {
+    if (watchId !== null) {
+      navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+    }
+    layers.userLocation.clearLayers();
+    userCoords = null;
   }
 
   function showRoute(start, dest) {
@@ -387,7 +489,9 @@ window.PathRouter = (function () {
 
     if ($("btnEnd")) $("btnEnd").hidden = false;
 
-    setURLParams(start.id, dest.id);
+    if (start.id !== GPS_START_ID) {
+      setURLParams(start.id, dest.id);
+    }
     setStatus(`Route calculated: ${start.name} → ${dest.name}`);
   }
 
@@ -446,8 +550,19 @@ window.PathRouter = (function () {
       const startSelect = $("selStart");
       const endSelect = $("selDest");
 
-      fillSelect(startSelect, screens, "Select starting LCD display screen");
-      fillSelect(endSelect, entrances, "Select destination entrance");
+      fillSelect(startSelect, screens, "Select starting display screen", true);
+      fillSelect(endSelect, entrances, "Select destination entrance", false);
+
+      // Listener for start select dropdown change
+      if (startSelect) {
+        startSelect.addEventListener("change", (e) => {
+          if (e.target.value === GPS_START_ID) {
+            startLocationTracking();
+          } else if (watchId !== null) {
+            stopLocationTracking();
+          }
+        });
+      }
 
       setStatus("");
       setTimeout(() => map.invalidateSize(), 200);
@@ -479,11 +594,29 @@ window.PathRouter = (function () {
 
       if (!startSelect || !endSelect) return;
 
-      const s = findItem(screens, startSelect.value);
       const d = findItem(entrances, endSelect.value);
 
+      if (startSelect.value === GPS_START_ID) {
+        if (!d) {
+          setStatus("Please select a destination entrance.", true);
+          return;
+        }
+        if (!userCoords) {
+          startLocationTracking(d);
+        } else {
+          const s = {
+            id: GPS_START_ID,
+            name: "My Current Location",
+            coordinates: userCoords
+          };
+          showRoute(s, d);
+        }
+        return;
+      }
+
+      const s = findItem(screens, startSelect.value);
       if (!s || !d) {
-        setStatus("Please select both a start screen and a destination entrance.", true);
+        setStatus("Please select both a start location and a destination entrance.", true);
         return;
       }
       showRoute(s, d);
@@ -494,16 +627,17 @@ window.PathRouter = (function () {
   if (endRouteBtn) {
     endRouteBtn.addEventListener("click", () => {
       layers.route.clearLayers();
-      
+      stopLocationTracking();
+
       const startSelect = $("selStart");
       const endSelect = $("selDest");
       if (startSelect) startSelect.value = "";
       if (endSelect) endSelect.value = "";
-      
+
       if ($("cardStart")) $("cardStart").textContent = "–";
       if ($("cardDest")) $("cardDest").textContent = "–";
       if ($("cardEta")) $("cardEta").textContent = "–";
-      
+
       endRouteBtn.hidden = true;
       setURLParams(null, null);
       setStatus("Route cleared.");
