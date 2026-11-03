@@ -3,21 +3,30 @@
 // ==========================================
 
 window.GEONEXUS = {
-    PUBLIC_BASE_URL: "https://u22502689-dev.github.io/geonexus-nav/",
-    ROUTE_PAGE: "route.html",
+  PUBLIC_BASE_URL: "https://u22502689-dev.github.io/geonexus-nav/",
+  ROUTE_PAGE: "route.html",
 
-    DATA: {
-        BUILDINGS: "Buildings.geojson",
-        PATHWAYS: "Pathways.geojson",
-        AOI: "campus_aoi.geojson"
-    },
+  DATA: {
+    BUILDINGS: "Buildings.geojson",
+    PATHWAYS: "Pathways.geojson",
+    AOI: "campus_aoi.geojson"
+  },
 
-    ROUTING: {
-        WALK_SPEED_MS: 1.4,
-        ROUTE_COLOR: "#ec4899",
-        START_COLOR: "#22c55e",
-        DESTINATION_COLOR: "#ef4444"
-    }
+  ROUTING: {
+    WALK_SPEED_MS: 1.4,
+    ROUTE_COLOR: "#ec4899",
+    START_COLOR: "#22c55e",
+    DESTINATION_COLOR: "#ef4444"
+  },
+
+  // Helper function to build QR code URLs dynamically
+  getRouteUrl: function (destId, startId = "USER_GPS_LOCATION") {
+    const base = this.PUBLIC_BASE_URL.endsWith("/")
+      ? `${this.PUBLIC_BASE_URL}${this.ROUTE_PAGE}`
+      : `${this.PUBLIC_BASE_URL}/${this.ROUTE_PAGE}`;
+      
+    return `${base}?s=${encodeURIComponent(startId)}&d=${encodeURIComponent(destId)}`;
+  }
 };
 
 
