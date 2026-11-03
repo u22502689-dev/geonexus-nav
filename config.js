@@ -1,17 +1,12 @@
 // GeoNexus deployment config (loaded by index.html and route.html).
-//
-// PUBLIC_BASE_URL: the public folder that holds route.html, e.g.
-//   "https://<username>.github.io/<repo>/"
-// Leave it "" to use the folder the 3D page was opened from. That only works when
-// the 3D page is opened from the public site (NOT localhost / file://), otherwise
-// the QR code will point at an address phones cannot reach.
 window.GEONEXUS = {
   PUBLIC_BASE_URL: "https://u22502689-dev.github.io/geonexus-nav/",
   ROUTE_PAGE: "route.html",
-  BUILDINGS_URL: "Buildings.geojson",
+  SCREENS_URL: "Dashboard_loc.geojson",
+  ENTRANCES_URL: "building_entrances.geojson",
   PATHWAYS_URL: "Pathways.geojson",
   AOI_URL: "campus_aoi.geojson",
-  WALK_SPEED_MS: 1.4 // metres per second, used for the estimated walking time
+  WALK_SPEED_MS: 1.4 // metres per second, used for estimated walking time
 };
 
 (function () {
@@ -19,12 +14,11 @@ window.GEONEXUS = {
   const CFG = window.GEONEXUS;
   const $ = (id) => document.getElementById(id);
 
-  // Same property names the 3D app uses, so names match between the two pages.
-  const NAME_FIELDS = ["Name", "name", "NAME", "building_name", "building:name", "title"];
-
   const setStatus = (msg, isError) => {
-    $("status").textContent = msg || "";
-    $("status").className = isError ? "error" : "";
+    if ($("status")) {
+      $("status").textContent = msg || "";
+      $("status").className = isError ? "error" : "";
+    }
   };
 
   const map = L.map("map");
@@ -35,71 +29,76 @@ window.GEONEXUS = {
   map.setView([-25.7545, 28.2290], 16);
 
   const routeLayer = L.layerGroup().addTo(map);
+  const screensLayer = L.layerGroup().addTo(map);
+  const entrancesLayer = L.layerGroup().addTo(map);
+
   let network = null;
-  let buildings = [];
+  let screens = [];
+  let entrances = [];
 
-  /* ---------- buildings ---------- */
+  // Custom icon for LCD display screens (Start points)
+  const screenIcon = L.divIcon({
+    className: "custom-screen-marker",
+    html: `<div style="background-color: #0284c7; width: 14px; height: 14px; border-radius: 3px; border: 2px solid white; box-shadow: 0 0 4px rgba(0,0,0,0.4);"></div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9]
+  });
 
-  function nameOf(props, idx) {
-    for (const f of NAME_FIELDS) {
-      const v = props && props[f];
-      if (v !== undefined && v !== null && v !== "") return String(v);
-    }
-    return "Building " + (idx + 1);
-  }
+  // Custom icon for building entrances (End points)
+  const entranceIcon = L.divIcon({
+    className: "custom-entrance-marker",
+    html: `<div style="background-color: #3b82f6; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 4px rgba(0,0,0,0.4);"></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8]
+  });
 
-  // One entry per polygon, in file order. The 3D app numbers buildings the same
-  // way (building-0, building-1, ...), so ?s=3 means the same building in both.
-  function parseBuildings(gj) {
+  /* ---------- Points parser helper ---------- */
+
+  function parsePoints(geojson, nameProp, prefix) {
     const out = [];
-    const add = (rings, f) => {
-      const idx = out.length;
-      const outer = rings[0] || [];
-      let x = 0, y = 0;
-      outer.forEach((c) => { x += c[0]; y += c[1]; });
+    ((geojson && geojson.features) || []).forEach((f, idx) => {
+      const g = f.geometry;
+      if (!g || g.type !== "Point") return;
+      const props = f.properties || {};
+      const name = props[nameProp] || props.name || props.Name || `${prefix} ${idx + 1}`;
       out.push({
         id: String(idx),
-        name: nameOf(f.properties, idx),
-        rings,
-        center: outer.length ? [x / outer.length, y / outer.length] : null
+        name: String(name),
+        coordinates: g.coordinates, // [lng, lat]
+        latLng: [g.coordinates[1], g.coordinates[0]] // [lat, lng] for Leaflet
       });
-    };
-    ((gj && gj.features) || []).forEach((f) => {
-      const g = f.geometry;
-      if (!g) return;
-      if (g.type === "Polygon") add(g.coordinates, f);
-      else if (g.type === "MultiPolygon") g.coordinates.forEach((p) => add(p, f));
     });
-    return out.filter((b) => b.center);
+    return out;
   }
 
-  function findBuilding(param) {
+  function findItem(list, param) {
     if (param === null || param === undefined || param === "") return null;
     const q = String(param).trim();
     return (
-      buildings.find((b) => b.id === q) ||
-      buildings.find((b) => b.name.toLowerCase() === q.toLowerCase()) ||
+      list.find((item) => item.id === q) ||
+      list.find((item) => item.name.toLowerCase() === q.toLowerCase()) ||
       null
     );
   }
 
-  function fillSelect(sel, placeholder) {
+  function fillSelect(sel, list, placeholder) {
+    if (!sel) return;
     sel.replaceChildren();
     const ph = document.createElement("option");
     ph.value = "";
     ph.textContent = placeholder;
     sel.appendChild(ph);
-    [...buildings]
+    [...list]
       .sort((a, b) => a.name.localeCompare(b.name))
-      .forEach((b) => {
+      .forEach((item) => {
         const o = document.createElement("option");
-        o.value = b.id;
-        o.textContent = b.name;
+        o.value = item.id;
+        o.textContent = item.name;
         sel.appendChild(o);
       });
   }
 
-  /* ---------- URL state ---------- */
+  /* ---------- URL State Sync ---------- */
 
   function setParams(s, d) {
     const url = new URL(window.location.href);
@@ -111,62 +110,59 @@ window.GEONEXUS = {
     history.replaceState(null, "", url.toString());
   }
 
-  /* ---------- route display (mirrors the 3D app: pink line, green start, red end) ---------- */
+  /* ---------- Route Display ---------- */
 
   function showRoute(start, dest) {
     routeLayer.clearLayers();
-    if (start.id === dest.id) { setStatus("Please choose two different buildings.", true); return; }
-
     let r;
     try {
-      r = network.route(start.center, dest.center);
+      // PathRouter takes coordinates as [lng, lat]
+      r = network.route(start.coordinates, dest.coordinates);
     } catch (err) {
       setStatus(err.message, true);
       return;
     }
 
-    const hl = (b, color) =>
-      L.polygon(b.rings.map((ring) => ring.map((c) => [c[1], c[0]])), {
-        color, weight: 3, fillColor: color, fillOpacity: 0.35
-      }).addTo(routeLayer);
-    hl(start, "#22c55e");
-    hl(dest, "#ef4444");
-
+    // Polyline outline and route line
     L.polyline(r.path, { color: "#ffffff", weight: 10, opacity: 0.95 }).addTo(routeLayer);
     const line = L.polyline(r.path, { color: "#ec4899", weight: 6 }).addTo(routeLayer);
 
-    const dot = (b, color, cls, text) =>
-      L.circleMarker([b.center[1], b.center[0]], {
+    // Marker labels
+    const dot = (latLng, color, cls, text) =>
+      L.circleMarker(latLng, {
         radius: 9, color: "#fff", weight: 3, fillColor: color, fillOpacity: 1
       }).bindTooltip(text, { permanent: true, direction: "top", offset: [0, -10], className: cls }).addTo(routeLayer);
-    dot(start, "#22c55e", "label-start", "START: " + start.name);
-    dot(dest, "#ef4444", "label-end", "END: " + dest.name);
+
+    dot(start.latLng, "#22c55e", "label-start", "START: " + start.name);
+    dot(dest.latLng, "#ef4444", "label-end", "END: " + dest.name);
 
     map.fitBounds(line.getBounds(), { padding: [50, 50] });
 
     const mins = Math.max(1, Math.round(r.distance / CFG.WALK_SPEED_MS / 60));
-    $("cardStart").textContent = start.name;
-    $("cardDest").textContent = dest.name;
-    $("cardEta").textContent = "≈ " + mins + " min (" + Math.round(r.distance) + " m)";
-    $("selStart").value = start.id;
-    $("selDest").value = dest.id;
-    $("btnEnd").hidden = false;
+    if ($("cardStart")) $("cardStart").textContent = start.name;
+    if ($("cardDest")) $("cardDest").textContent = dest.name;
+    if ($("cardEta")) $("cardEta").textContent = "≈ " + mins + " min (" + Math.round(r.distance) + " m)";
+    if ($("selStart")) $("selStart").value = start.id;
+    if ($("selDest")) $("selDest").value = dest.id;
+    if ($("btnEnd")) $("btnEnd").hidden = false;
+
     setParams(start.id, dest.id);
     setStatus("Route found: " + start.name + " → " + dest.name + ".");
   }
 
   function endRouting() {
     routeLayer.clearLayers();
-    ["cardStart", "cardDest", "cardEta"].forEach((id) => ($(id).textContent = "–"));
-    $("btnEnd").hidden = true;
-    $("selStart").value = "";
-    $("selDest").value = "";
+    ["cardStart", "cardDest", "cardEta"].forEach((id) => {
+      if ($(id)) $(id).textContent = "–";
+    });
+    if ($("btnEnd")) $("btnEnd").hidden = true;
+    if ($("selStart")) $("selStart").value = "";
+    if ($("selDest")) $("selDest").value = "";
     setParams(null, null);
-    setStatus("Routing ended. Pick a new start and destination, or scan another QR code.");
-    window.close(); // only works for tabs opened by script; otherwise the page stays usable
+    setStatus("Routing ended. Select a display screen and destination entrance.");
   }
 
-  /* ---------- load data ---------- */
+  /* ---------- Data Loader ---------- */
 
   async function loadJSON(url) {
     const res = await fetch(url, { cache: "no-cache" });
@@ -176,18 +172,34 @@ window.GEONEXUS = {
 
   async function init() {
     try {
-      const [bGeo, pGeo] = await Promise.all([loadJSON(CFG.BUILDINGS_URL), loadJSON(CFG.PATHWAYS_URL)]);
-      buildings = parseBuildings(bGeo);
+      const [sGeo, eGeo, pGeo] = await Promise.all([
+        loadJSON(CFG.SCREENS_URL),
+        loadJSON(CFG.ENTRANCES_URL),
+        loadJSON(CFG.PATHWAYS_URL)
+      ]);
+
+      screens = parsePoints(sGeo, "LCD Display Name", "Display Screen");
+      entrances = parsePoints(eGeo, "Entrance Name", "Building Entrance");
       network = new PathRouter.PathNetwork(pGeo);
 
-      // Base layers: buildings (with name tooltips) and pathways
-      buildings.forEach((b) => {
-        L.polygon(b.rings.map((ring) => ring.map((c) => [c[1], c[0]])), {
-          color: "#475569", weight: 1, fillColor: "#FFE5B4", fillOpacity: 0.55
-        }).bindTooltip(b.name, { sticky: true }).addTo(map);
+      // Render Display Screen markers
+      screens.forEach((s) => {
+        L.marker(s.latLng, { icon: screenIcon })
+          .bindTooltip(`LCD Screen: ${s.name}`)
+          .addTo(screensLayer);
       });
+
+      // Render Entrance markers
+      entrances.forEach((e) => {
+        L.marker(e.latLng, { icon: entranceIcon })
+          .bindTooltip(`Entrance: ${e.name}`)
+          .addTo(entrancesLayer);
+      });
+
+      // Pathways basemap overlay
       L.geoJSON(pGeo, { style: { color: "#16a34a", weight: 3, opacity: 0.7 }, interactive: false }).addTo(map);
 
+      // Campus AOI boundary
       try {
         const aoi = await loadJSON(CFG.AOI_URL);
         const layer = L.geoJSON(aoi, { style: { color: "#ef4444", weight: 3, fillOpacity: 0.05 }, interactive: false }).addTo(map);
@@ -197,32 +209,45 @@ window.GEONEXUS = {
         if (b.isValid()) map.fitBounds(b);
       }
 
-      fillSelect($("selStart"), "Select starting building");
-      fillSelect($("selDest"), "Select destination building");
+      fillSelect($("selStart"), screens, "Select starting LCD display screen");
+      fillSelect($("selDest"), entrances, "Select destination entrance");
       setStatus("");
     } catch (err) {
-      setStatus(err.message + ". Open this page over http(s), not as a local file.", true);
+      setStatus(err.message + ". Open this page over HTTP(S), not as a local file.", true);
       return;
     }
 
+    // Process incoming URL search parameters (from QR Code scanning)
     const p = new URLSearchParams(window.location.search);
     if (p.has("s") || p.has("d")) {
-      const s = findBuilding(p.get("s")), d = findBuilding(p.get("d"));
-      if (s && d) showRoute(s, d);
-      else setStatus("This QR code refers to a building that was not found. Pick a route below.", true);
+      const s = findItem(screens, p.get("s"));
+      const d = findItem(entrances, p.get("d"));
+      if (s && d) {
+        showRoute(s, d);
+      } else {
+        setStatus("This QR code refers to a screen or entrance point that was not found.", true);
+      }
     } else {
-      setStatus("Pick a start and destination, or scan a QR code from the 3D model.");
+      setStatus("Select a display screen and destination entrance to build a route.");
     }
   }
 
-  $("routeForm").addEventListener("submit", (e) => {
-    e.preventDefault();
-    if (!network) return;
-    const s = findBuilding($("selStart").value), d = findBuilding($("selDest").value);
-    if (!s || !d) { setStatus("Please choose both a start and a destination.", true); return; }
-    showRoute(s, d);
-  });
-  $("btnEnd").addEventListener("click", endRouting);
+  const routeForm = $("routeForm");
+  if (routeForm) {
+    routeForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      if (!network) return;
+      const s = findItem(screens, $("selStart").value);
+      const d = findItem(entrances, $("selDest").value);
+      if (!s || !d) {
+        setStatus("Please choose both a start screen and a destination entrance.", true);
+        return;
+      }
+      showRoute(s, d);
+    });
+  }
+
+  if ($("btnEnd")) $("btnEnd").addEventListener("click", endRouting);
 
   init();
 })();
