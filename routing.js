@@ -287,17 +287,17 @@
 
   const map = L.map("map", { zoomControl: true }).setView([-25.7545, 28.2315], 17);
 
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-    maxZoom: 19,
-    subdomains: "abcd",
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+  // Free Esri Dark Gray canvas (no API key required)
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 16,
+    attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
   }).addTo(map);
 
   const layers = {
     aoi: L.layerGroup().addTo(map),
+    buildings: L.layerGroup().addTo(map),
     paths: L.layerGroup().addTo(map),
     screens: L.layerGroup().addTo(map),
-    entrances: L.layerGroup().addTo(map),
     route: L.layerGroup().addTo(map)
   };
 
@@ -306,13 +306,6 @@
     html: `<div style="background-color: #06b6d4; width: 14px; height: 14px; border-radius: 3px; border: 2px solid #ffffff; box-shadow: 0 0 8px rgba(6,182,212,0.8);"></div>`,
     iconSize: [18, 18],
     iconAnchor: [9, 9]
-  });
-
-  const entranceIcon = L.divIcon({
-    className: "custom-entrance-marker",
-    html: `<div style="background-color: #3b82f6; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #ffffff; box-shadow: 0 0 6px rgba(59,130,246,0.8);"></div>`,
-    iconSize: [16, 16],
-    iconAnchor: [8, 8]
   });
 
   let network = null;
@@ -404,6 +397,7 @@
       const screensUrl = CFG.SCREENS_URL || "Dashboard_loc.geojson";
       const entrancesUrl = CFG.ENTRANCES_URL || "building_entrances.geojson";
       const pathwaysUrl = CFG.PATHWAYS_URL || "Pathways.geojson";
+      const buildingsUrl = CFG.BUILDINGS_URL || "Buildings.geojson";
       const aoiUrl = CFG.AOI_URL || "campus_aoi.geojson";
 
       const [sGeo, eGeo, pGeo] = await Promise.all([
@@ -416,6 +410,7 @@
       entrances = PathRouter.extractPoints(eGeo, "Entrance Name");
       network = new PathRouter.PathNetwork(pGeo);
 
+      // Render Display Screen markers
       screens.forEach((s) => {
         const latLng = [s.coordinates[1], s.coordinates[0]];
         L.marker(latLng, { icon: screenIcon })
@@ -423,18 +418,31 @@
           .addTo(layers.screens);
       });
 
-      entrances.forEach((e) => {
-        const latLng = [e.coordinates[1], e.coordinates[0]];
-        L.marker(latLng, { icon: entranceIcon })
-          .bindTooltip(`Entrance: ${e.name}`)
-          .addTo(layers.entrances);
-      });
+      // Note: Entrance points are loaded into 'entrances' for routing math,
+      // but NOT added as visible map markers to keep the view clean.
 
+      // Render Building footprints
+      try {
+        const bGeo = await fetchJSON(buildingsUrl);
+        L.geoJSON(bGeo, {
+          style: {
+            color: "#475569",
+            weight: 1,
+            fillColor: "#FFE5B4",
+            fillOpacity: 0.4
+          }
+        }).addTo(layers.buildings);
+      } catch (e) {
+        console.warn("Buildings dataset optional render skipped:", e);
+      }
+
+      // Render Pathway vector network
       L.geoJSON(pGeo, {
         style: { color: "#24fb5a", weight: 3, opacity: 0.6 },
         interactive: false
       }).addTo(layers.paths);
 
+      // Render Campus Boundary AOI
       try {
         const aoiGeo = await fetchJSON(aoiUrl);
         const aoiLayer = L.geoJSON(aoiGeo, {
