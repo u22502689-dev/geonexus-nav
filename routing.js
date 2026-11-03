@@ -455,6 +455,16 @@ window.PathRouter = (function () {
       return;
     }
 
+    // =========================================================
+    // ADD THIS BLOCK TO UPDATE YOUR DISPLAYED QR CODE:
+    // =========================================================
+    const qrUrl = window.GEONEXUS.getRouteUrl(dest.id, "USER_GPS_LOCATION");
+    const qrImageEl = $("qrCodeImage"); // Make sure your <img> tag has id="qrCodeImage"
+    if (qrImageEl) {
+      qrImageEl.src = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrUrl)}`;
+    }
+    // =========================================================
+
     const routeColor = ROUTING_CFG.ROUTE_COLOR || "#ec4899";
     const startColor = ROUTING_CFG.START_COLOR || "#22c55e";
     const destColor = ROUTING_CFG.DESTINATION_COLOR || "#ef4444";
