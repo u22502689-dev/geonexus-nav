@@ -158,3 +158,13 @@ select:focus-visible, button:focus-visible {
   .controls { grid-template-columns: 1fr; }
   .summary { grid-template-columns: 1fr; }
 }
+/* ---------- Turn-by-turn directions ---------- */
+.directions { padding: 12px 20px; background: var(--panel); border-top: 1px solid var(--line); }
+.directions h2 { margin: 0 0 8px; font-family: 'Orbitron', sans-serif; font-size: 0.95rem; letter-spacing: 2px; color: var(--accent-bright); }
+.directions[hidden] { display: none; }
+#directionsList { list-style: none; margin: 0; padding: 0; max-height: 30vh; overflow-y: auto; }
+.step-item { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.step-item:last-child { border-bottom: 0; }
+.step-icon { font-size: 1.3rem; width: 1.6em; text-align: center; color: var(--accent-bright); }
+.step-details strong { display: block; font-weight: 500; }
+.step-details small { color: var(--muted); }
