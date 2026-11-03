@@ -1,10 +1,8 @@
-/*
- * GeoNexus - 2D pathway routing system and map controller.
- *
- * Starts: Dashboard_loc.geojson (by "LCD Display Name")
- * Destinations: building_entrances.geojson (by "Entrance Name")
- */
-(function (global) {
+// ==========================================
+// GEONEXUS PATH ROUTER
+// ==========================================
+
+window.PathRouter = (function () {
   "use strict";
 
   const EARTH = 6378137;
@@ -32,7 +30,7 @@
       points.push({
         id: index,
         name: String(name),
-        coordinates: g.coordinates // [lng, lat]
+        coordinates: g.coordinates // Standard GeoJSON [lng, lat]
       });
     });
     return points;
@@ -250,29 +248,33 @@
       for (let cur = E; cur !== undefined; cur = prev.get(cur)) ids.push(cur);
       ids.reverse();
 
+      // Ensure output is Leaflet format: [lat, lng]
       const path = [from, ...ids.map(lonlatOf), to].map((c) => [c[1], c[0]]);
       return { path, distance: dist.get(E) };
     }
   }
 
-  const api = { PathNetwork, extractPoints };
-  if (typeof module !== "undefined" && module.exports) module.exports = api;
-  else global.PathRouter = api;
-})(typeof window !== "undefined" ? window : globalThis);
+  return { PathNetwork, extractPoints };
+})();
 
-/* ---------- 2D MAP CONTROLLER & UI ---------- */
+
+// ==========================================
+// 2D MAP CONTROLLER & UI
+// ==========================================
 
 (function () {
   "use strict";
 
   const CFG = window.GEONEXUS || {};
+  const DATA_CFG = CFG.DATA || {};
+  const ROUTING_CFG = CFG.ROUTING || {};
   const $ = (id) => document.getElementById(id);
 
   const setStatus = (msg, isError) => {
-    const statusEl = $("routeStatus") || $("status");
+    const statusEl = $("status");
     if (statusEl) {
       statusEl.textContent = msg || "";
-      statusEl.style.color = isError ? "#ef4444" : "#2dd4bf";
+      statusEl.className = isError ? "error" : "";
     }
   };
 
@@ -287,11 +289,10 @@
 
   const map = L.map("map", { zoomControl: true }).setView([-25.7545, 28.2315], 17);
 
-  // Standard OpenStreetMap Tile Layer
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{y}/{x}.png", {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-  }).addTo(map);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map);
 
   const layers = {
     aoi: L.layerGroup().addTo(map),
@@ -352,33 +353,39 @@
       return;
     }
 
-    L.polyline(r.path, { color: "#ffffff", weight: 8, opacity: 0.9 }).addTo(layers.route);
-    const line = L.polyline(r.path, { color: "#ec4899", weight: 5, opacity: 1 }).addTo(layers.route);
+    const routeColor = ROUTING_CFG.ROUTE_COLOR || "#ec4899";
+    const startColor = ROUTING_CFG.START_COLOR || "#22c55e";
+    const destColor = ROUTING_CFG.DESTINATION_COLOR || "#ef4444";
 
-    const dot = (latLng, color, text) =>
+    L.polyline(r.path, { color: "#ffffff", weight: 8, opacity: 0.9 }).addTo(layers.route);
+    const line = L.polyline(r.path, { color: routeColor, weight: 5, opacity: 1 }).addTo(layers.route);
+
+    const dot = (latLng, color, text, customClass) =>
       L.circleMarker(latLng, {
         radius: 8, color: "#ffffff", weight: 2, fillColor: color, fillOpacity: 1
-      }).bindTooltip(text, { permanent: true, direction: "top", offset: [0, -10] }).addTo(layers.route);
+      }).bindTooltip(text, { permanent: true, direction: "top", offset: [0, -10], className: customClass }).addTo(layers.route);
 
     const startLatLng = [start.coordinates[1], start.coordinates[0]];
     const destLatLng = [dest.coordinates[1], dest.coordinates[0]];
 
-    dot(startLatLng, "#22c55e", `START: ${start.name}`);
-    dot(destLatLng, "#ef4444", `END: ${dest.name}`);
+    dot(startLatLng, startColor, `START: ${start.name}`, "label-start");
+    dot(destLatLng, destColor, `END: ${dest.name}`, "label-end");
 
     map.fitBounds(line.getBounds(), { padding: [50, 50] });
 
-    const walkSpeed = CFG.WALK_SPEED_MS || 1.4;
+    const walkSpeed = ROUTING_CFG.WALK_SPEED_MS || 1.4;
     const mins = Math.max(1, Math.round(r.distance / walkSpeed / 60));
 
     if ($("cardStart")) $("cardStart").textContent = start.name;
     if ($("cardDest")) $("cardDest").textContent = dest.name;
     if ($("cardEta")) $("cardEta").textContent = `≈ ${mins} min (${Math.round(r.distance)} m)`;
 
-    const startSelect = $("startBuilding") || $("selStart");
-    const endSelect = $("endBuilding") || $("selDest");
+    const startSelect = $("selStart");
+    const endSelect = $("selDest");
     if (startSelect) startSelect.value = start.id;
-    if (endSelect) endSelect.value = end.id;
+    if (endSelect) endSelect.value = dest.id;
+
+    if ($("btnEnd")) $("btnEnd").hidden = false;
 
     setURLParams(start.id, dest.id);
     setStatus(`Route calculated: ${start.name} → ${dest.name}`);
@@ -388,9 +395,9 @@
     try {
       const screensUrl = CFG.SCREENS_URL || "Dashboard_loc.geojson";
       const entrancesUrl = CFG.ENTRANCES_URL || "building_entrances.geojson";
-      const pathwaysUrl = CFG.PATHWAYS_URL || "Pathways.geojson";
-      const buildingsUrl = CFG.BUILDINGS_URL || "Buildings.geojson";
-      const aoiUrl = CFG.AOI_URL || "campus_aoi.geojson";
+      const pathwaysUrl = DATA_CFG.PATHWAYS || "Pathways.geojson";
+      const buildingsUrl = DATA_CFG.BUILDINGS || "Buildings.geojson";
+      const aoiUrl = DATA_CFG.AOI || "campus_aoi.geojson";
 
       const [sGeo, eGeo, pGeo] = await Promise.all([
         fetchJSON(screensUrl),
@@ -402,10 +409,6 @@
       entrances = PathRouter.extractPoints(eGeo, "Entrance Name");
       network = new PathRouter.PathNetwork(pGeo);
 
-      // Note: Screens/Dashboard points are loaded for routing math,
-      // but NOT rendered as visible map markers.
-
-      // Render Building footprints
       try {
         const bGeo = await fetchJSON(buildingsUrl);
         L.geoJSON(bGeo, {
@@ -420,13 +423,11 @@
         console.warn("Buildings dataset optional render skipped:", e);
       }
 
-      // Render Pathway vector network
       L.geoJSON(pGeo, {
         style: { color: "#24fb5a", weight: 3, opacity: 0.6 },
         interactive: false
       }).addTo(layers.paths);
 
-      // Render Campus Boundary AOI
       try {
         const aoiGeo = await fetchJSON(aoiUrl);
         const aoiLayer = L.geoJSON(aoiGeo, {
@@ -442,8 +443,8 @@
         if (pBounds.isValid()) map.fitBounds(pBounds);
       }
 
-      const startSelect = $("startBuilding") || $("selStart");
-      const endSelect = $("endBuilding") || $("selDest");
+      const startSelect = $("selStart");
+      const endSelect = $("selDest");
 
       fillSelect(startSelect, screens, "Select starting LCD display screen");
       fillSelect(endSelect, entrances, "Select destination entrance");
@@ -469,12 +470,12 @@
     }
   }
 
-  const showRouteBtn = $("findRoute") || $("btnShowRoute") || document.querySelector("button");
-  if (showRouteBtn) {
-    showRouteBtn.addEventListener("click", (e) => {
+  const showRouteForm = $("routeForm");
+  if (showRouteForm) {
+    showRouteForm.addEventListener("submit", (e) => {
       e.preventDefault();
-      const startSelect = $("startBuilding") || $("selStart");
-      const endSelect = $("endBuilding") || $("selDest");
+      const startSelect = $("selStart");
+      const endSelect = $("selDest");
 
       if (!startSelect || !endSelect) return;
 
@@ -486,6 +487,26 @@
         return;
       }
       showRoute(s, d);
+    });
+  }
+
+  const endRouteBtn = $("btnEnd");
+  if (endRouteBtn) {
+    endRouteBtn.addEventListener("click", () => {
+      layers.route.clearLayers();
+      
+      const startSelect = $("selStart");
+      const endSelect = $("selDest");
+      if (startSelect) startSelect.value = "";
+      if (endSelect) endSelect.value = "";
+      
+      if ($("cardStart")) $("cardStart").textContent = "–";
+      if ($("cardDest")) $("cardDest").textContent = "–";
+      if ($("cardEta")) $("cardEta").textContent = "–";
+      
+      endRouteBtn.hidden = true;
+      setURLParams(null, null);
+      setStatus("Route cleared.");
     });
   }
 
