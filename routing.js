@@ -287,10 +287,10 @@
 
   const map = L.map("map", { zoomControl: true }).setView([-25.7545, 28.2315], 17);
 
-  // Free Esri Dark Gray canvas (no API key required)
-  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
-    maxZoom: 16,
-    attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
+  // Standard OpenStreetMap Tile Layer (as shown in image)
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{y}/{x}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(map);
 
   const layers = {
@@ -417,9 +417,6 @@
           .bindTooltip(`LCD Screen: ${s.name}`)
           .addTo(layers.screens);
       });
-
-      // Note: Entrance points are loaded into 'entrances' for routing math,
-      // but NOT added as visible map markers to keep the view clean.
 
       // Render Building footprints
       try {
