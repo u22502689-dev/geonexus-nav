@@ -1,5 +1,5 @@
 /*
- * GeoNexus - 2D port of the pathway routing system.
+ * GeoNexus - 2D pathway routing system and map controller.
  *
  * Starts: Dashboard_loc.geojson (by "LCD Display Name")
  * Destinations: building_entrances.geojson (by "Entrance Name")
@@ -259,3 +259,243 @@
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else global.PathRouter = api;
 })(typeof window !== "undefined" ? window : globalThis);
+
+/* ---------- 2D MAP CONTROLLER & UI ---------- */
+
+(function () {
+  "use strict";
+
+  const CFG = window.GEONEXUS || {};
+  const $ = (id) => document.getElementById(id);
+
+  const setStatus = (msg, isError) => {
+    const statusEl = $("routeStatus") || $("status");
+    if (statusEl) {
+      statusEl.textContent = msg || "";
+      statusEl.style.color = isError ? "#ef4444" : "#2dd4bf";
+    }
+  };
+
+  async function fetchJSON(url) {
+    const res = await fetch(url, { cache: "no-cache" });
+    if (!res.ok) throw new Error(`Could not load ${url} (HTTP ${res.status})`);
+    return res.json();
+  }
+
+  const mapContainer = $("map");
+  if (!mapContainer) return;
+
+  const map = L.map("map", { zoomControl: true }).setView([-25.7545, 28.2315], 17);
+
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    maxZoom: 19,
+    subdomains: "abcd",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+  }).addTo(map);
+
+  const layers = {
+    aoi: L.layerGroup().addTo(map),
+    paths: L.layerGroup().addTo(map),
+    screens: L.layerGroup().addTo(map),
+    entrances: L.layerGroup().addTo(map),
+    route: L.layerGroup().addTo(map)
+  };
+
+  const screenIcon = L.divIcon({
+    className: "custom-screen-marker",
+    html: `<div style="background-color: #06b6d4; width: 14px; height: 14px; border-radius: 3px; border: 2px solid #ffffff; box-shadow: 0 0 8px rgba(6,182,212,0.8);"></div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9]
+  });
+
+  const entranceIcon = L.divIcon({
+    className: "custom-entrance-marker",
+    html: `<div style="background-color: #3b82f6; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #ffffff; box-shadow: 0 0 6px rgba(59,130,246,0.8);"></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8]
+  });
+
+  let network = null;
+  let screens = [];
+  let entrances = [];
+
+  function findItem(list, param) {
+    if (param === null || param === undefined || param === "") return null;
+    const q = String(param).trim();
+    return (
+      list.find((item) => String(item.id) === q) ||
+      list.find((item) => item.name.toLowerCase() === q.toLowerCase()) ||
+      null
+    );
+  }
+
+  function fillSelect(sel, list, placeholder) {
+    if (!sel) return;
+    sel.replaceChildren();
+    const ph = document.createElement("option");
+    ph.value = "";
+    ph.textContent = placeholder;
+    sel.appendChild(ph);
+    [...list]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .forEach((item) => {
+        const o = document.createElement("option");
+        o.value = item.id;
+        o.textContent = item.name;
+        sel.appendChild(o);
+      });
+  }
+
+  function setURLParams(s, d) {
+    const url = new URL(window.location.href);
+    ["s", "d"].forEach((k) => url.searchParams.delete(k));
+    if (s !== null && d !== null) {
+      url.searchParams.set("s", s);
+      url.searchParams.set("d", d);
+    }
+    history.replaceState(null, "", url.toString());
+  }
+
+  function showRoute(start, dest) {
+    layers.route.clearLayers();
+
+    let r;
+    try {
+      r = network.route(start.coordinates, dest.coordinates);
+    } catch (err) {
+      setStatus(err.message, true);
+      return;
+    }
+
+    L.polyline(r.path, { color: "#ffffff", weight: 8, opacity: 0.9 }).addTo(layers.route);
+    const line = L.polyline(r.path, { color: "#ec4899", weight: 5, opacity: 1 }).addTo(layers.route);
+
+    const dot = (latLng, color, text) =>
+      L.circleMarker(latLng, {
+        radius: 8, color: "#ffffff", weight: 2, fillColor: color, fillOpacity: 1
+      }).bindTooltip(text, { permanent: true, direction: "top", offset: [0, -10] }).addTo(layers.route);
+
+    const startLatLng = [start.coordinates[1], start.coordinates[0]];
+    const destLatLng = [dest.coordinates[1], dest.coordinates[0]];
+
+    dot(startLatLng, "#22c55e", `START: ${start.name}`);
+    dot(destLatLng, "#ef4444", `END: ${dest.name}`);
+
+    map.fitBounds(line.getBounds(), { padding: [50, 50] });
+
+    const walkSpeed = CFG.WALK_SPEED_MS || 1.4;
+    const mins = Math.max(1, Math.round(r.distance / walkSpeed / 60));
+
+    if ($("cardStart")) $("cardStart").textContent = start.name;
+    if ($("cardDest")) $("cardDest").textContent = dest.name;
+    if ($("cardEta")) $("cardEta").textContent = `≈ ${mins} min (${Math.round(r.distance)} m)`;
+
+    const startSelect = $("startBuilding") || $("selStart");
+    const endSelect = $("endBuilding") || $("selDest");
+    if (startSelect) startSelect.value = start.id;
+    if (endSelect) endSelect.value = end.id;
+
+    setURLParams(start.id, dest.id);
+    setStatus(`Route calculated: ${start.name} → ${dest.name}`);
+  }
+
+  async function init() {
+    try {
+      const screensUrl = CFG.SCREENS_URL || "Dashboard_loc.geojson";
+      const entrancesUrl = CFG.ENTRANCES_URL || "building_entrances.geojson";
+      const pathwaysUrl = CFG.PATHWAYS_URL || "Pathways.geojson";
+      const aoiUrl = CFG.AOI_URL || "campus_aoi.geojson";
+
+      const [sGeo, eGeo, pGeo] = await Promise.all([
+        fetchJSON(screensUrl),
+        fetchJSON(entrancesUrl),
+        fetchJSON(pathwaysUrl)
+      ]);
+
+      screens = PathRouter.extractPoints(sGeo, "LCD Display Name");
+      entrances = PathRouter.extractPoints(eGeo, "Entrance Name");
+      network = new PathRouter.PathNetwork(pGeo);
+
+      screens.forEach((s) => {
+        const latLng = [s.coordinates[1], s.coordinates[0]];
+        L.marker(latLng, { icon: screenIcon })
+          .bindTooltip(`LCD Screen: ${s.name}`)
+          .addTo(layers.screens);
+      });
+
+      entrances.forEach((e) => {
+        const latLng = [e.coordinates[1], e.coordinates[0]];
+        L.marker(latLng, { icon: entranceIcon })
+          .bindTooltip(`Entrance: ${e.name}`)
+          .addTo(layers.entrances);
+      });
+
+      L.geoJSON(pGeo, {
+        style: { color: "#24fb5a", weight: 3, opacity: 0.6 },
+        interactive: false
+      }).addTo(layers.paths);
+
+      try {
+        const aoiGeo = await fetchJSON(aoiUrl);
+        const aoiLayer = L.geoJSON(aoiGeo, {
+          style: { color: "#ef4444", weight: 2, fillOpacity: 0.05 },
+          interactive: false
+        }).addTo(layers.aoi);
+
+        if (aoiLayer.getBounds().isValid()) {
+          map.fitBounds(aoiLayer.getBounds());
+        }
+      } catch (e) {
+        const pBounds = L.geoJSON(pGeo).getBounds();
+        if (pBounds.isValid()) map.fitBounds(pBounds);
+      }
+
+      const startSelect = $("startBuilding") || $("selStart");
+      const endSelect = $("endBuilding") || $("selDest");
+
+      fillSelect(startSelect, screens, "Select starting LCD display screen");
+      fillSelect(endSelect, entrances, "Select destination entrance");
+
+      setStatus("");
+      setTimeout(() => map.invalidateSize(), 200);
+
+    } catch (err) {
+      console.error(err);
+      setStatus(`${err.message}. Ensure files are served over HTTP/HTTPS.`, true);
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("s") && params.has("d")) {
+      const s = findItem(screens, params.get("s"));
+      const d = findItem(entrances, params.get("d"));
+      if (s && d) {
+        showRoute(s, d);
+      } else {
+        setStatus("Target display screen or building entrance point was not found.", true);
+      }
+    }
+  }
+
+  const showRouteBtn = $("findRoute") || $("btnShowRoute") || document.querySelector("button");
+  if (showRouteBtn) {
+    showRouteBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const startSelect = $("startBuilding") || $("selStart");
+      const endSelect = $("endBuilding") || $("selDest");
+
+      if (!startSelect || !endSelect) return;
+
+      const s = findItem(screens, startSelect.value);
+      const d = findItem(entrances, endSelect.value);
+
+      if (!s || !d) {
+        setStatus("Please select both a start screen and a destination entrance.", true);
+        return;
+      }
+      showRoute(s, d);
+    });
+  }
+
+  init();
+})();
