@@ -287,7 +287,7 @@
 
   const map = L.map("map", { zoomControl: true }).setView([-25.7545, 28.2315], 17);
 
-  // Standard OpenStreetMap Tile Layer (as shown in image)
+  // Standard OpenStreetMap Tile Layer
   L.tileLayer("https://tile.openstreetmap.org/{z}/{y}/{x}.png", {
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -297,16 +297,8 @@
     aoi: L.layerGroup().addTo(map),
     buildings: L.layerGroup().addTo(map),
     paths: L.layerGroup().addTo(map),
-    screens: L.layerGroup().addTo(map),
     route: L.layerGroup().addTo(map)
   };
-
-  const screenIcon = L.divIcon({
-    className: "custom-screen-marker",
-    html: `<div style="background-color: #06b6d4; width: 14px; height: 14px; border-radius: 3px; border: 2px solid #ffffff; box-shadow: 0 0 8px rgba(6,182,212,0.8);"></div>`,
-    iconSize: [18, 18],
-    iconAnchor: [9, 9]
-  });
 
   let network = null;
   let screens = [];
@@ -410,13 +402,8 @@
       entrances = PathRouter.extractPoints(eGeo, "Entrance Name");
       network = new PathRouter.PathNetwork(pGeo);
 
-      // Render Display Screen markers
-      screens.forEach((s) => {
-        const latLng = [s.coordinates[1], s.coordinates[0]];
-        L.marker(latLng, { icon: screenIcon })
-          .bindTooltip(`LCD Screen: ${s.name}`)
-          .addTo(layers.screens);
-      });
+      // Note: Screens/Dashboard points are loaded for routing math,
+      // but NOT rendered as visible map markers.
 
       // Render Building footprints
       try {
