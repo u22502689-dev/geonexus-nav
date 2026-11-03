@@ -364,76 +364,65 @@ window.PathRouter = (function () {
     history.replaceState(null, "", url.toString());
   }
 
-  function startLocationTracking(autoRouteTargetDest = null) {
-    if (!("geolocation" in navigator)) {
-      setStatus("Geolocation is not supported by your browser.", true);
-      return;
-    }
+ function startLocationTracking(isPassiveOverlay = false) {
+  if (!("geolocation" in navigator)) {
+    console.warn("Geolocation is not supported by this device/browser.");
+    return;
+  }
 
-    if (watchId !== null) return; // Already watching
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
 
-    setStatus("Acquiring GPS position...");
+  watchId = navigator.geolocation.watchPosition(
+    (position) => {
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+      const accuracy = position.coords.accuracy;
 
-    watchId = navigator.geolocation.watchPosition(
-      (position) => {
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-        const accuracy = position.coords.accuracy;
+      userCoords = [lng, lat];
+      layers.userLocation.clearLayers();
 
-        userCoords = [lng, lat];
-        layers.userLocation.clearLayers();
+      // Render GPS accuracy circle
+      L.circle([lat, lng], {
+        radius: accuracy,
+        color: "#3b82f6",
+        fillColor: "#3b82f6",
+        fillOpacity: 0.15,
+        weight: 1,
+        interactive: false
+      }).addTo(layers.userLocation);
 
-        // Accuracy radius blue circle
-        L.circle([lat, lng], {
-          radius: accuracy,
-          color: "#3b82f6",
-          fillColor: "#3b82f6",
-          fillOpacity: 0.15,
-          weight: 1,
-          interactive: false
-        }).addTo(layers.userLocation);
+      // Render live user location marker
+      L.circleMarker([lat, lng], {
+        radius: 8,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: "#2563eb",
+        fillOpacity: 1
+      }).bindTooltip("You Are Here", { direction: "top", offset: [0, -10] })
+        .addTo(layers.userLocation);
 
-        // Marker for user position
-        L.circleMarker([lat, lng], {
-          radius: 8,
-          color: "#ffffff",
-          weight: 2,
-          fillColor: "#2563eb",
-          fillOpacity: 1
-        }).bindTooltip("Your Location", { direction: "top", offset: [0, -10] })
-          .addTo(layers.userLocation);
-
-        // Dynamic re-route if navigating from Current Location
+      // Only recalculate route origin if explicitly navigating in dynamic GPS mode
+      if (!isPassiveOverlay) {
         const startSelect = $("selStart");
         const endSelect = $("selDest");
-
-        if (startSelect && startSelect.value === GPS_START_ID) {
-          const dest = autoRouteTargetDest || (endSelect ? findItem(entrances, endSelect.value) : null);
+        if (startSelect && startSelect.value === GPS_START_ID && endSelect && endSelect.value) {
+          const dest = findItem(entrances, endSelect.value);
           if (dest) {
-            const userStart = {
-              id: GPS_START_ID,
-              name: "My Current Location",
-              coordinates: userCoords
-            };
-            showRoute(userStart, dest);
+            showRoute({ id: GPS_START_ID, name: "My Current Location", coordinates: userCoords }, dest);
           }
         }
-      },
-      (err) => {
-        const msgs = {
-          1: "Location permission denied.",
-          2: "GPS position unavailable.",
-          3: "GPS request timed out."
-        };
-        setStatus(msgs[err.code] || "Location tracking error.", true);
-      },
-      {
-        enableHighAccuracy: true,
-        maximumAge: 2000,
-        timeout: 10000
       }
-    );
-  }
+    },
+    (err) => {
+      console.warn("GPS overlay position error:", err);
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 2000,
+      timeout: 10000
+    }
+  );
+}
 
   function stopLocationTracking() {
     if (watchId !== null) {
