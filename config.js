@@ -6,7 +6,7 @@ window.GEONEXUS = {
 
   // Dataset locations for the 2D router
   SCREENS_URL: "Dashboard_loc.geojson",
-  ENTRANCES_URL: "building_entrances.geojson",
+  BUILDINGS_URL: "Buildings.geojson",
   PATHWAYS_URL: "Pathways.geojson",
   AOI_URL: "campus_aoi.geojson",
 
