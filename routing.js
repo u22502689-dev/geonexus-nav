@@ -573,15 +573,19 @@ window.PathRouter = (function () {
     }
 
     const params = new URLSearchParams(window.location.search);
-    if (params.has("s") && params.has("d")) {
-      const s = findItem(screens, params.get("s"));
-      const d = findItem(entrances, params.get("d"));
-      if (s && d) {
-        showRoute(s, d);
-      } else {
-        setStatus("Target display screen or building entrance point was not found.", true);
-      }
+  if (params.has("s") && params.has("d")) {
+    const s = findItem(screens, params.get("s"));
+    const d = findItem(entrances, params.get("d"));
+    if (s && d) {
+      // 1. Plot the route from the LCD screen to the entrance
+      showRoute(s, d);
+      
+      // 2. Automatically launch background GPS tracking to render the user's live position dot
+      startLocationTracking(true);
+    } else {
+      setStatus("Target display screen or building entrance point was not found.", true);
     }
+  }
   }
 
   const showRouteForm = $("routeForm");
