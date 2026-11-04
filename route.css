@@ -2,169 +2,279 @@
 
 /* Same palette as the GEONEXUS website */
 :root {
-  --bg: #05070d;
-  --panel: #0b1322;
-  --text: #e2e8f0;
-  --muted: #9fb3c8;
-  --accent: #23b5a4;
-  --accent-bright: #48e5c2;
-  --danger: #ff6b6b;
+  --bg-void: #05070D;
+  --bg-panel: #0B1322;
+  --accent: #23B5A4;
+  --accent-bright: #48E5C2;
+  --text-main: #E2E8F0;
+  --text-dim: #4A5568;
   --line: rgba(35, 181, 164, 0.3);
 }
 
-* { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
+html,
+body,
+#cesiumContainer {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  background: var(--bg-void);
+}
 
-body {
+#cesiumContainer {
+  position: absolute;
+  inset: 0;
+}
+
+#panel {
+  position: absolute;
+  z-index: 10;
+  top: 12px;
+  left: 12px;
+  width: 280px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 18px;
+  background: rgba(11, 19, 34, 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: var(--text-main);
+  border: 1px solid rgba(35, 181, 164, 0.4);
+  border-radius: 20px;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  color: var(--text);
-  font-family: 'Space Grotesk', system-ui, -apple-system, "Segoe UI", sans-serif;
+  gap: 10px;
+  font-size: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
-/* ---------- Header ---------- */
-header {
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-}
+#panel::-webkit-scrollbar { width: 6px; }
+#panel::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 4px; }
+#panel::-webkit-scrollbar-track { background: transparent; }
 
-.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
-.brand-logo { height: 36px; width: auto; display: block; }
-
-header h1 {
-  margin: 0;
+#panel h1 {
+  margin: 0 0 4px;
   font-family: 'Orbitron', sans-serif;
   font-weight: 900;
-  font-size: 1.1rem;
-  letter-spacing: 4px;
-  color: #fff;
+  font-size: 18px;
+  letter-spacing: 3px;
+  color: var(--accent-bright);
 }
 
-header span {
-  font-size: 0.85rem;
-  color: var(--accent);
-  padding: 2px 12px;
-  border: 1px solid rgba(35, 181, 164, 0.5);
-  border-radius: 999px;
-}
-
-/* ---------- Controls ---------- */
-.controls {
-  display: grid;
-  grid-template-columns: 1fr 1fr auto;
-  gap: 12px;
-  align-items: end;
-  padding: 14px 20px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
-}
-
-.controls label {
-  display: block;
-  font-size: 0.85rem;
+#panel h2 {
+  margin: 2px 0;
+  font-size: 16px;
   font-weight: 500;
   color: var(--accent-bright);
-  margin-bottom: 4px;
 }
 
-.controls select {
+#panel label {
+  display: block;
+  cursor: pointer;
+}
+
+#panel input[type="checkbox"] {
+  accent-color: var(--accent-bright);
+}
+
+#panel select {
   width: 100%;
-  padding: 10px 14px;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid rgba(35, 181, 164, 0.5);
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid rgba(35, 181, 164, 0.4);
   border-radius: 999px;
+  background: var(--bg-void);
+  color: var(--text-main);
   font-family: inherit;
-  font-size: 0.95rem;
+  font-size: 13px;
 }
 
-.controls select option { background: var(--panel); color: var(--text); }
+#panel select option {
+  background: var(--bg-panel);
+  color: var(--text-main);
+}
 
-button {
-  padding: 11px 22px;
+#panel button {
+  width: 100%;
+  padding: 10px;
   border: 0;
   border-radius: 999px;
-  background: var(--accent-bright);
-  color: var(--bg);
+  background: var(--accent);
+  color: var(--bg-void);
+  cursor: pointer;
   font-family: inherit;
   font-weight: 600;
-  cursor: pointer;
-  font-size: 0.95rem;
+  font-size: 13px;
   transition: background 0.2s ease;
 }
 
-button:hover { background: #fff; }
-button.danger { background: var(--danger); }
-button.danger:hover { background: #ff9a9a; }
-button[hidden] { display: none; }
+#panel button:hover {
+  background: var(--accent-bright);
+}
 
-select:focus-visible, button:focus-visible {
+#panel button.secondary {
+  background: transparent;
+  color: var(--accent-bright);
+  border: 1px solid rgba(35, 181, 164, 0.5);
+}
+
+#panel button.secondary:hover {
+  background: rgba(35, 181, 164, 0.18);
+}
+
+#panel select:focus-visible,
+#panel button:focus-visible,
+#panel input:focus-visible {
   outline: 2px solid var(--accent-bright);
   outline-offset: 2px;
 }
 
-/* ---------- Status ---------- */
-#status { padding: 10px 20px; min-height: 2.4em; font-size: 0.95rem; color: var(--accent-bright); }
-#status.error { color: #ff9a9a; }
+#panel hr {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 6px 0;
+}
 
-/* ---------- Map ---------- */
-#map { flex: 1; min-height: 300px; background: var(--bg); }
+#routeStatus {
+  padding: 10px 12px;
+  background: rgba(35, 181, 164, 0.1);
+  border: 1px solid rgba(35, 181, 164, 0.25);
+  border-radius: 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 
-.leaflet-container { background: var(--bg); font-family: inherit; }
+#info {
+  margin-top: 4px;
+  font-size: 12px;
+  max-height: 180px;
+  overflow: auto;
+  color: var(--text-main);
+  opacity: 0.85;
+}
 
-.leaflet-bar { border: 1px solid rgba(35, 181, 164, 0.4) !important; border-radius: 14px !important; overflow: hidden; }
-.leaflet-bar a { background-color: rgba(11, 19, 34, 0.92); color: var(--accent-bright); border-bottom: 1px solid var(--line); }
-.leaflet-bar a:hover { background-color: var(--accent); color: var(--bg); }
+#info table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow-wrap: anywhere;
+}
 
-.leaflet-control-attribution { background: rgba(11, 19, 34, 0.8) !important; color: var(--text) !important; }
-.leaflet-control-attribution a { color: var(--accent-bright) !important; }
+#info td {
+  padding: 5px 4px;
+  border-bottom: 1px solid rgba(35, 181, 164, 0.2);
+  vertical-align: top;
+}
+
+#tooltip {
+  position: absolute;
+  z-index: 1000;
+  pointer-events: none;
+  background: rgba(11, 19, 34, 0.95);
+  color: var(--text-main);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid rgba(35, 181, 164, 0.5);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  display: none;
+}
+
+@media (max-width: 600px) {
+  #panel {
+    top: 8px;
+    left: 8px;
+    width: min(280px, calc(100vw - 16px));
+    max-height: calc(100vh - 16px);
+  }
+}
+
+
+
+/* ---------- QR CODE BOX (replaces the inline <style> in the HTML) ---------- */
+#qrBox { margin-top: 12px; text-align: center; }
+#qrBox[hidden] { display: none; }
+
+/* Keep the white background: QR codes need it to be scannable */
+#qrcode {
+  display: inline-block;
+  padding: 10px;
+  background: #fff;
+  border: 2px solid var(--accent);
+  border-radius: 16px;
+}
+#qrcode img, #qrcode canvas { display: block; }
+
+#qrHint { margin: 10px 0 4px; font-size: 12px; color: var(--text-main); opacity: 0.85; }
+#qrWarn { margin: 6px 0 0; font-size: 12px; color: #ff9a9a; }
+#qrLink { font-size: 11px; word-break: break-all; color: var(--accent-bright); }
+#qrLink:hover { color: #fff; }
+
+/* ---------- 2D MAP (Leaflet) ---------- */
+.leaflet-container {
+  background: var(--bg-void);
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+}
+
+/* Zoom and layer buttons */
+.leaflet-bar,
+.leaflet-control-layers {
+  border: 1px solid rgba(35, 181, 164, 0.4) !important;
+  border-radius: 14px !important;
+  overflow: hidden;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4) !important;
+}
+
+.leaflet-bar a,
+.leaflet-control-layers-toggle {
+  background-color: rgba(11, 19, 34, 0.92);
+  color: var(--accent-bright);
+  border-bottom: 1px solid rgba(35, 181, 164, 0.3);
+}
+
+.leaflet-bar a:hover,
+.leaflet-bar a:focus {
+  background-color: var(--accent);
+  color: var(--bg-void);
+}
+
+.leaflet-control-layers-expanded {
+  background: rgba(11, 19, 34, 0.92);
+  color: var(--text-main);
+  padding: 10px 14px;
+}
+
+/* Popups and tooltips */
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: var(--bg-panel);
+  color: var(--text-main);
+  border: 1px solid rgba(35, 181, 164, 0.4);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+.leaflet-popup-content-wrapper { border-radius: 18px; }
+.leaflet-popup-content { font-size: 13px; line-height: 1.5; margin: 12px 16px; }
+.leaflet-container a.leaflet-popup-close-button { color: var(--accent-bright); }
 
 .leaflet-tooltip {
   background: rgba(11, 19, 34, 0.95);
-  color: var(--text);
+  color: var(--text-main);
   border: 1px solid rgba(35, 181, 164, 0.5);
   border-radius: 999px;
-  padding: 4px 12px;
-  font-family: inherit;
+  padding: 4px 10px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 .leaflet-tooltip::before { display: none; }
 
-/* Start / end labels keep their green and red so they stay easy to tell apart */
-.leaflet-tooltip.label-start { background: #16a34a; color: #fff; border: 0; font-weight: 600; }
-.leaflet-tooltip.label-end { background: #dc2626; color: #fff; border: 0; font-weight: 600; }
-
-/* ---------- Route summary ---------- */
-.summary {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1px;
-  background: var(--line);
-  border-top: 1px solid rgba(35, 181, 164, 0.4);
+/* Credits line */
+.leaflet-control-attribution {
+  background: rgba(11, 19, 34, 0.8) !important;
+  color: var(--text-main) !important;
+  opacity: 0.8;
 }
+.leaflet-control-attribution a { color: var(--accent-bright) !important; }
 
-.summary div { background: var(--panel); padding: 12px 20px; }
-.summary small { display: block; font-size: 0.8rem; color: var(--muted); }
-.summary strong { display: block; margin-top: 2px; font-size: 1rem; font-weight: 500; word-break: break-word; }
-
-.end-row { padding: 12px 20px; text-align: center; background: var(--panel); }
-.end-row button { width: 100%; max-width: 360px; padding: 14px; }
-
-@media (max-width: 640px) {
-  .controls { grid-template-columns: 1fr; }
-  .summary { grid-template-columns: 1fr; }
-}
-/* ---------- Turn-by-turn directions ---------- */
-.directions { padding: 12px 20px; background: var(--panel); border-top: 1px solid var(--line); }
-.directions h2 { margin: 0 0 8px; font-family: 'Orbitron', sans-serif; font-size: 0.95rem; letter-spacing: 2px; color: var(--accent-bright); }
-.directions[hidden] { display: none; }
-#directionsList { list-style: none; margin: 0; padding: 0; max-height: 30vh; overflow-y: auto; }
-.step-item { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
-.step-item:last-child { border-bottom: 0; }
-.step-icon { font-size: 1.3rem; width: 1.6em; text-align: center; color: var(--accent-bright); }
-.step-details strong { display: block; font-weight: 500; }
-.step-details small { color: var(--muted); }
