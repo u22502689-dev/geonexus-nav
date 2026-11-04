@@ -1,35 +1,72 @@
 // GEONEXUS SMART CAMPUS NAVIGATION DASHBOARD SYSTEM (3D)
+//
+// Load order in the HTML:  config.js  ->  routing.js  ->  app.js (type="module")
+// routing.js provides PathRouter (config, stable IDs, routing, share URLs).
+//
+// Put your (rotated + URL-restricted) Cesium Ion token in config.js:
+//   window.GEONEXUS = { CESIUM_TOKEN: "...", ... };
 
-Cesium.Ion.defaultAccessToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjF4NEQ2RXVIdnhEU3ZVQ0wiLCJqdGkiOiIzNjViYjNhMS04ODJlLTRkYWItYmVkMC0xN2I1NTdjZjgxYjIiLCJpZCI6NTEyMTU0LCJpc3MiOiJodHRwczovL2FwaS5jZXNpdW0uY29tIiwiYXVkIjoidW5kZWZpbmVkX2RlZmF1bHQiLCJpYXQiOjE3OTA3NzY3MDl9.NcMiDOBCqxHQfxRQC35kOslp0cXZeyWPPo9m-MklGpY";
+const $ = (id) => document.getElementById(id);
+const setText = (id, text) => { const el = $(id); if (el) el.textContent = text; };
+const on = (id, event, handler) => {
+  const el = $(id);
+  if (el) el.addEventListener(event, handler);
+  else console.warn(`Element #${id} not found; skipped binding "${event}".`);
+};
+
+if (!window.PathRouter) {
+  setText("routeStatus", "routing.js failed to load. It must be included before app.js.");
+  throw new Error("PathRouter is missing: include routing.js before app.js.");
+}
+
+const CFG = PathRouter.getConfig();
+const ROUTING = CFG.routing;
 
 const IMAGERY_ASSET_ID = null;
 
 const HEIGHT_FIELDS = ["height", "Height", "HEIGHT", "building_height", "z", "Z"];
 const LEVEL_FIELDS = ["building:levels", "levels", "Levels", "floors", "Floors"];
 const NAME_FIELDS = ["Name", "name", "NAME", "building_name", "building:name", "title", "LCD Display Name", "Entrance Name"];
+const GID_FIELD = "__gid"; // stable ID injected into each point feature (same IDs as the 2D page)
 
 const METERS_PER_LEVEL = 3.5;
 const DEFAULT_HEIGHT = 10;
 
-// Entrance points are invisible by default. They stay in the scene (and stay
-// pickable), so the dropdown, routing, hover tooltip and "Pick End" still work.
-// The #tglEntrances checkbox (if present) switches them visible/invisible.
+// Entrance points are near-invisible by default. They stay in the scene so the
+// dropdown, routing, hover tooltip and "Pick End" still work. (Fully
+// transparent points can be discarded by the renderer and become unpickable,
+// so we use a tiny alpha instead, and also reveal them while picking.)
 const ENTRANCES_VISIBLE_BY_DEFAULT = false;
 const ENTRANCE_COLOR = Cesium.Color.fromCssColorString("#3b82f6");
+const ENTRANCE_HIDDEN_COLOR = Cesium.Color.WHITE.withAlpha(0.01);
 
-const terrainProvider = await Cesium.createWorldTerrainAsync();
+/* ---------- Viewer ---------- */
+
+if (CFG.cesiumToken) {
+  Cesium.Ion.defaultAccessToken = CFG.cesiumToken;
+} else {
+  console.warn("No Cesium Ion token configured (GEONEXUS.CESIUM_TOKEN). World terrain may fail to load.");
+}
+
+let terrainProvider;
+try {
+  terrainProvider = await Cesium.createWorldTerrainAsync();
+} catch (error) {
+  console.warn("World terrain failed to load; using a flat ellipsoid.", error);
+  terrainProvider = new Cesium.EllipsoidTerrainProvider();
+  setText("routeStatus", "Terrain could not be loaded (check the Cesium Ion token). Using flat terrain.");
+}
 
 const viewer = new Cesium.Viewer("cesiumContainer", {
   terrainProvider,
   baseLayerPicker: false,
   geocoder: false,
   timeline: false,
-  animation: false
+  animation: false,
+  infoBox: false // we render our own info panel
 });
 
 viewer.scene.globe.depthTestAgainstTerrain = true;
-
-/* ---------- Optional imagery ---------- */
 
 if (IMAGERY_ASSET_ID) {
   viewer.imageryLayers.removeAll();
@@ -65,42 +102,61 @@ function buildingHeight(entity, time) {
 function getEntityName(entity, time) {
   for (const field of NAME_FIELDS) {
     const value = propertyValue(entity, field, time);
-    if (value !== undefined && value !== null && value !== "") {
-      return String(value);
-    }
+    if (value !== undefined && value !== null && value !== "") return String(value);
   }
   return null;
 }
 
-function getPointPosition(entity, time) {
-  if (entity.position) {
-    return entity.position.getValue(time);
+const gidOf = (entity) => {
+  const v = propertyValue(entity, GID_FIELD, Cesium.JulianDate.now());
+  return v === undefined || v === null ? null : String(v);
+};
+
+// Sample terrain for many cartographics in ONE request.
+async function sampleTerrain(cartographics, label) {
+  if (!cartographics.length) return;
+  try {
+    await Cesium.sampleTerrainMostDetailed(terrainProvider, cartographics);
+  } catch (error) {
+    console.warn(`${label} terrain sampling failed:`, error);
   }
-  return null;
+}
+
+// Writes the stable ID into each point feature so entities can be matched back.
+function tagFeatures(json, points) {
+  for (const p of points) {
+    const feature = json.features[p.featureIndex];
+    feature.properties = feature.properties || {};
+    feature.properties[GID_FIELD] = p.id;
+  }
 }
 
 /* ---------- Load Layers ---------- */
 
-async function loadBuildings() {
-  const dataSource = await Cesium.GeoJsonDataSource.load("Buildings.geojson");
-  const time = Cesium.JulianDate.now();
-  const entities = dataSource.entities.values.filter(entity => entity.polygon);
+const pointData = { dashboards: [], entrances: [] };
+let pathwaysJson = null;
 
-  for (const entity of entities) {
+async function loadBuildings() {
+  const dataSource = await Cesium.GeoJsonDataSource.load(CFG.buildingsUrl);
+  const time = Cesium.JulianDate.now();
+  const items = [];
+  const allCartographics = [];
+
+  for (const entity of dataSource.entities.values) {
+    if (!entity.polygon) continue;
     const hierarchy = entity.polygon.hierarchy.getValue(time);
     if (!hierarchy?.positions?.length) continue;
+    const cartographics = hierarchy.positions.map((p) => Cesium.Cartographic.fromCartesian(p));
+    items.push({ entity, cartographics });
+    for (const c of cartographics) allCartographics.push(c);
+  }
 
-    const cartographics = hierarchy.positions.map(position =>
-      Cesium.Cartographic.fromCartesian(position)
-    );
+  await sampleTerrain(allCartographics, "Building"); // one request for all buildings
 
-    try {
-      await Cesium.sampleTerrainMostDetailed(terrainProvider, cartographics);
-    } catch (error) {
-      console.warn("Terrain sampling failed:", error);
-    }
-
-    const baseHeight = Math.min(...cartographics.map(point => point.height ?? 0));
+  for (const { entity, cartographics } of items) {
+    let baseHeight = Infinity;
+    for (const c of cartographics) baseHeight = Math.min(baseHeight, c.height ?? 0);
+    if (!Number.isFinite(baseHeight)) baseHeight = 0;
 
     entity.polygon.height = baseHeight - 1;
     entity.polygon.extrudedHeight = baseHeight + buildingHeight(entity, time);
@@ -116,7 +172,8 @@ async function loadBuildings() {
 }
 
 async function loadPaths() {
-  const dataSource = await Cesium.GeoJsonDataSource.load("Pathways.geojson", { clampToGround: true });
+  pathwaysJson = await PathRouter.fetchJSON(CFG.pathwaysUrl);
+  const dataSource = await Cesium.GeoJsonDataSource.load(pathwaysJson, { clampToGround: true });
   for (const entity of dataSource.entities.values) {
     if (!entity.polyline) continue;
     entity.polyline.material = new Cesium.PolylineOutlineMaterialProperty({
@@ -133,7 +190,7 @@ async function loadPaths() {
 
 async function loadAoi() {
   const red = Cesium.Color.fromCssColorString("#ef4444");
-  const dataSource = await Cesium.GeoJsonDataSource.load("campus_aoi.geojson", {
+  const dataSource = await Cesium.GeoJsonDataSource.load(CFG.aoiUrl, {
     fill: red.withAlpha(0.1),
     clampToGround: true
   });
@@ -158,26 +215,21 @@ async function loadAoi() {
 }
 
 async function loadDashboardLocations() {
-  const dataSource = await Cesium.GeoJsonDataSource.load("Dashboard_loc.geojson", { clampToGround: true });
+  const json = await PathRouter.fetchJSON(CFG.screensUrl);
+  pointData.dashboards = PathRouter.extractPoints(json, "LCD Display Name");
+  tagFeatures(json, pointData.dashboards);
+
+  const dataSource = await Cesium.GeoJsonDataSource.load(json, { clampToGround: true });
   const time = Cesium.JulianDate.now();
 
-  for (const entity of dataSource.entities.values) {
-    if (!entity.position) continue;
-    const cartesian = entity.position.getValue(time);
-    const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+  const entities = dataSource.entities.values.filter((e) => e.position);
+  const cartographics = entities.map((e) => Cesium.Cartographic.fromCartesian(e.position.getValue(time)));
+  await sampleTerrain(cartographics, "Dashboard");
 
-    try {
-      await Cesium.sampleTerrainMostDetailed(terrainProvider, [cartographic]);
-    } catch (error) {
-      console.warn("Dashboard terrain sampling failed:", error);
-    }
-
-    entity.position = Cesium.Cartesian3.fromRadians(
-      cartographic.longitude,
-      cartographic.latitude,
-      cartographic.height ?? 0
-    );
-
+  entities.forEach((entity, i) => {
+    const c = cartographics[i];
+    // Position already carries the sampled terrain height, so no CLAMP is needed.
+    entity.position = Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, c.height ?? 0);
     entity.billboard = undefined;
     entity.point = undefined;
     entity.model = new Cesium.ModelGraphics({
@@ -185,32 +237,33 @@ async function loadDashboardLocations() {
       scale: 1.0,
       minimumPixelSize: 20,
       maximumScale: 50,
-      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+      heightReference: Cesium.HeightReference.NONE,
       shadows: Cesium.ShadowMode.ENABLED
     });
-  }
+  });
 
   await viewer.dataSources.add(dataSource);
   return dataSource;
 }
 
-// Show or hide the entrance points visually. The data source itself always
-// stays "shown" so the entities remain pickable and usable for routing.
 function setEntrancesVisible(dataSource, visible) {
   for (const entity of dataSource.entities.values) {
     if (!entity.point) continue;
-    entity.point.color = visible ? ENTRANCE_COLOR : Cesium.Color.TRANSPARENT;
-    entity.point.outlineColor = visible ? Cesium.Color.WHITE : Cesium.Color.TRANSPARENT;
+    entity.point.color = visible ? ENTRANCE_COLOR : ENTRANCE_HIDDEN_COLOR;
+    entity.point.outlineColor = visible ? Cesium.Color.WHITE : ENTRANCE_HIDDEN_COLOR;
     entity.point.outlineWidth = visible ? 2 : 0;
   }
 }
 
 async function loadBuildingEntrances() {
-  const dataSource = await Cesium.GeoJsonDataSource.load("building_entrances.geojson", { clampToGround: true });
+  const json = await PathRouter.fetchJSON(CFG.entrancesUrl);
+  pointData.entrances = PathRouter.extractPoints(json, "Entrance Name");
+  tagFeatures(json, pointData.entrances);
+
+  const dataSource = await Cesium.GeoJsonDataSource.load(json, { clampToGround: true });
 
   for (const entity of dataSource.entities.values) {
     if (!entity.position) continue;
-
     entity.billboard = undefined;
     entity.point = new Cesium.PointGraphics({
       pixelSize: 10,
@@ -222,425 +275,343 @@ async function loadBuildingEntrances() {
   }
 
   setEntrancesVisible(dataSource, ENTRANCES_VISIBLE_BY_DEFAULT);
-
   await viewer.dataSources.add(dataSource);
   return dataSource;
 }
 
-/* ---------- Layer Initialization ---------- */
+/* ---------- Layer Initialization (one failed layer no longer kills the app) ---------- */
 
-const [buildings, paths, aoi, dashboards, entrances] = await Promise.all([
-  loadBuildings(),
-  loadPaths(),
-  loadAoi(),
-  loadDashboardLocations(),
-  loadBuildingEntrances()
-]);
+const layerLoaders = [
+  ["buildings", loadBuildings],
+  ["paths", loadPaths],
+  ["aoi", loadAoi],
+  ["dashboards", loadDashboardLocations],
+  ["entrances", loadBuildingEntrances]
+];
 
-const home = () => viewer.flyTo(aoi, {
-  duration: 2,
-  offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-35), 0)
-});
+const layerResults = await Promise.allSettled(layerLoaders.map(([, load]) => load()));
+const failedLayers = [];
+const sources = {};
 
-document.getElementById("btnHome").onclick = home;
+for (let i = 0; i < layerResults.length; i++) {
+  const name = layerLoaders[i][0];
+  const result = layerResults[i];
+  if (result.status === "fulfilled") {
+    sources[name] = result.value;
+  } else {
+    console.error(`Layer "${name}" failed to load:`, result.reason);
+    failedLayers.push(name);
+    const empty = new Cesium.CustomDataSource(name); // keeps .show / .entities valid
+    await viewer.dataSources.add(empty);
+    sources[name] = empty;
+  }
+}
 
-document.getElementById("tglBuildings").onchange = event => { buildings.show = event.target.checked; };
-document.getElementById("tglPaths").onchange = event => { paths.show = event.target.checked; };
-document.getElementById("tglAoi").onchange = event => { aoi.show = event.target.checked; };
+const { buildings, paths, aoi, dashboards, entrances } = sources;
 
-const tglDashboards = document.getElementById("tglDashboards");
-if (tglDashboards) tglDashboards.onchange = event => { dashboards.show = event.target.checked; };
+/* ---------- Toolbar / toggles ---------- */
 
-const tglEntrances = document.getElementById("tglEntrances");
-if (tglEntrances) {
-  tglEntrances.checked = ENTRANCES_VISIBLE_BY_DEFAULT; // keep checkbox in sync
-  tglEntrances.onchange = event => setEntrancesVisible(entrances, event.target.checked);
+let entrancesUserVisible = ENTRANCES_VISIBLE_BY_DEFAULT;
+
+const home = () => {
+  const target = [aoi, buildings, paths].find((ds) => ds.entities.values.length > 0);
+  if (!target) return;
+  viewer.flyTo(target, {
+    duration: 2,
+    offset: new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(-35), 0)
+  });
+};
+
+on("btnHome", "click", home);
+on("tglBuildings", "change", (e) => { buildings.show = e.target.checked; });
+on("tglPaths", "change", (e) => { paths.show = e.target.checked; });
+on("tglAoi", "change", (e) => { aoi.show = e.target.checked; });
+if ($("tglDashboards")) on("tglDashboards", "change", (e) => { dashboards.show = e.target.checked; });
+if ($("tglEntrances")) {
+  $("tglEntrances").checked = ENTRANCES_VISIBLE_BY_DEFAULT;
+  on("tglEntrances", "change", (e) => {
+    entrancesUserVisible = e.target.checked;
+    applyEntranceVisibility();
+  });
 }
 
 home();
 
-/* ---------- Hover Tooltip ---------- */
-
-const tooltip = document.getElementById("tooltip");
-const hoverHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-
-hoverHandler.setInputAction(movement => {
-  const picked = viewer.scene.pick(movement.endPosition);
-  if (Cesium.defined(picked)) {
-    const time = Cesium.JulianDate.now();
-
-    if (picked.id?.polygon) {
-      const name = getEntityName(picked.id, time);
-      if (name) {
-        tooltip.style.display = "block";
-        tooltip.style.left = `${movement.endPosition.x + 15}px`;
-        tooltip.style.top = `${movement.endPosition.y + 15}px`;
-        tooltip.textContent = name;
-        return;
-      }
-    } else if (picked.id?.polyline) {
-      const roadName = propertyValue(picked.id, "Road Name", time) || propertyValue(picked.id, "name", time);
-      const roadType = propertyValue(picked.id, "Road Type", time) || "";
-      if (roadName) {
-        tooltip.style.display = "block";
-        tooltip.style.left = `${movement.endPosition.x + 15}px`;
-        tooltip.style.top = `${movement.endPosition.y + 15}px`;
-        tooltip.textContent = `${roadName} (${roadType})`;
-        return;
-      }
-    } else if (picked.id?.model) {
-      const displayTitle = propertyValue(picked.id, "LCD Display Name", time) || propertyValue(picked.id, "Name", time) || "Dashboard Screen";
-      tooltip.style.display = "block";
-      tooltip.style.left = `${movement.endPosition.x + 15}px`;
-      tooltip.style.top = `${movement.endPosition.y + 15}px`;
-      tooltip.textContent = `LCD: ${displayTitle}`;
-      return;
-    } else if (picked.id?.point) {
-      const entranceName = propertyValue(picked.id, "Entrance Name", time) || propertyValue(picked.id, "Name", time) || "Building Entrance";
-      tooltip.style.display = "block";
-      tooltip.style.left = `${movement.endPosition.x + 15}px`;
-      tooltip.style.top = `${movement.endPosition.y + 15}px`;
-      tooltip.textContent = `Entrance: ${entranceName}`;
-      return;
-    }
-  }
-  tooltip.style.display = "none";
-}, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
-
-/* ---------- Selected Entity Information ---------- */
-
-viewer.selectedEntityChanged.addEventListener(entity => {
-  const info = document.getElementById("info");
-  if (!entity) {
-    info.textContent = "Click a building, pathway, display screen, or entrance to see attributes.";
-    return;
-  }
-  const time = Cesium.JulianDate.now();
-
-  if (entity.model) {
-    const screenName = propertyValue(entity, "LCD Display Name", time) || propertyValue(entity, "Name", time) || "Dashboard Display";
-    info.replaceChildren();
-    const heading = document.createElement("strong");
-    heading.textContent = `Display Screen: ${screenName}`;
-    info.appendChild(heading);
-    return;
-  }
-
-  if (entity.point) {
-    const entranceName = propertyValue(entity, "Entrance Name", time) || propertyValue(entity, "Name", time) || "Building Entrance";
-    info.replaceChildren();
-    const heading = document.createElement("strong");
-    heading.textContent = `Entrance: ${entranceName}`;
-    info.appendChild(heading);
-    return;
-  }
-});
-
-/* ---------- Navigation Routing Infrastructure ---------- */
-
-const startSelect = document.getElementById("startBuilding");
-const endSelect = document.getElementById("endBuilding");
-const routeStatus = document.getElementById("routeStatus");
+/* ---------- Navigation state ---------- */
 
 const navigation = {
   dashboards: [],
   entrances: [],
-  graph: new Map(),
-  nodes: [],
+  network: null,
   routeEntity: null,
   startMarker: null,
   endMarker: null,
   pickMode: null
 };
 
-const START_COLOR = Cesium.Color.fromCssColorString("#22c55e");
-const END_COLOR = Cesium.Color.fromCssColorString("#ef4444");
-const ROUTE_COLOR = Cesium.Color.fromCssColorString("#ec4899");
+function applyEntranceVisibility() {
+  setEntrancesVisible(entrances, entrancesUserVisible || navigation.pickMode === "end");
+}
+
+function kindOf(entity) {
+  if (entity === navigation.routeEntity) return "route";
+  if (entity === navigation.startMarker) return "routeStart";
+  if (entity === navigation.endMarker) return "routeEnd";
+  const owner = entity.entityCollection?.owner;
+  if (owner === dashboards) return "screen";
+  if (owner === entrances) return "entrance";
+  if (owner === buildings) return "building";
+  if (owner === paths) return "path";
+  if (owner === aoi) return "aoi";
+  return "other";
+}
+
+/* ---------- Hover Tooltip (throttled to one pick per frame) ---------- */
+
+const tooltip = $("tooltip");
+const hoverHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+let hoverPosition = null;
+let hoverScheduled = false;
+
+function tooltipText(entity, time) {
+  switch (kindOf(entity)) {
+    case "building":
+      return getEntityName(entity, time);
+    case "path": {
+      const roadName = propertyValue(entity, "Road Name", time) || propertyValue(entity, "name", time);
+      if (!roadName) return null;
+      const roadType = propertyValue(entity, "Road Type", time);
+      return roadType ? `${roadName} (${roadType})` : String(roadName);
+    }
+    case "screen":
+      return `LCD: ${propertyValue(entity, "LCD Display Name", time) || propertyValue(entity, "Name", time) || "Dashboard Screen"}`;
+    case "entrance":
+      return `Entrance: ${propertyValue(entity, "Entrance Name", time) || propertyValue(entity, "Name", time) || "Building Entrance"}`;
+    case "routeStart":
+      return "Route start";
+    case "routeEnd":
+      return "Route destination";
+    default:
+      return null;
+  }
+}
+
+function processHover() {
+  hoverScheduled = false;
+  if (!tooltip || !hoverPosition) return;
+
+  const picked = viewer.scene.pick(hoverPosition);
+  const entity = picked?.id instanceof Cesium.Entity ? picked.id : null;
+  const text = entity ? tooltipText(entity, Cesium.JulianDate.now()) : null;
+
+  if (text) {
+    tooltip.style.display = "block";
+    tooltip.style.left = `${hoverPosition.x + 15}px`;
+    tooltip.style.top = `${hoverPosition.y + 15}px`;
+    tooltip.textContent = text;
+  } else {
+    tooltip.style.display = "none";
+  }
+}
+
+hoverHandler.setInputAction((movement) => {
+  hoverPosition = Cesium.Cartesian2.clone(movement.endPosition);
+  if (!hoverScheduled) {
+    hoverScheduled = true;
+    requestAnimationFrame(processHover);
+  }
+}, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+/* ---------- Selected Entity Information ---------- */
+
+const DEFAULT_INFO_TEXT = "Click a building, pathway, display screen, or entrance to see attributes.";
+
+function renderInfo(title, rows = []) {
+  const info = $("info");
+  if (!info) return;
+  info.replaceChildren();
+
+  const heading = document.createElement("strong");
+  heading.textContent = title;
+  info.appendChild(heading);
+
+  if (rows.length) {
+    const table = document.createElement("table");
+    for (const [key, value] of rows) {
+      const tr = document.createElement("tr");
+      const th = document.createElement("th");
+      const td = document.createElement("td");
+      th.textContent = key;
+      td.textContent = value;
+      tr.append(th, td);
+      table.appendChild(tr);
+    }
+    info.appendChild(table);
+  }
+}
+
+function propertyRows(entity, time) {
+  const rows = [];
+  const names = entity.properties?.propertyNames || [];
+  for (const name of names) {
+    if (name === GID_FIELD) continue;
+    const value = propertyValue(entity, name, time);
+    if (value === undefined || value === null || value === "") continue;
+    rows.push([name, typeof value === "object" ? JSON.stringify(value) : String(value)]);
+  }
+  return rows;
+}
+
+viewer.selectedEntityChanged.addEventListener((entity) => {
+  const info = $("info");
+  if (!entity) {
+    if (info) info.textContent = DEFAULT_INFO_TEXT;
+    return;
+  }
+
+  const time = Cesium.JulianDate.now();
+  const name = getEntityName(entity, time);
+
+  switch (kindOf(entity)) {
+    case "screen":
+      renderInfo(`Display Screen: ${name || "Dashboard Display"}`);
+      break;
+    case "entrance":
+      renderInfo(`Entrance: ${name || "Building Entrance"}`);
+      break;
+    case "building":
+      renderInfo(name || "Building", [
+        ["Height (m)", buildingHeight(entity, time).toFixed(1)],
+        ...propertyRows(entity, time)
+      ]);
+      break;
+    case "path":
+      renderInfo(
+        propertyValue(entity, "Road Name", time) || name || "Pathway",
+        propertyRows(entity, time)
+      );
+      break;
+    case "aoi":
+      renderInfo("Campus boundary");
+      break;
+    case "routeStart":
+      renderInfo("Route start", [["Location", navigation.startItem?.name || ""]]);
+      break;
+    case "routeEnd":
+      renderInfo("Route destination", [["Location", navigation.endItem?.name || ""]]);
+      break;
+    case "route":
+      renderInfo("Highlighted campus route");
+      break;
+    default:
+      renderInfo(entity.name || "Selected feature", entity.properties ? propertyRows(entity, time) : []);
+  }
+});
+
+/* ---------- Routing UI ---------- */
+
+const startSelect = $("startBuilding");
+const endSelect = $("endBuilding");
+const setRouteStatus = (msg) => setText("routeStatus", msg);
+
+const START_COLOR = Cesium.Color.fromCssColorString(ROUTING.startColor);
+const END_COLOR = Cesium.Color.fromCssColorString(ROUTING.destColor);
+const ROUTE_COLOR = Cesium.Color.fromCssColorString(ROUTING.routeColor);
+
+function buildItems(points, dataSource) {
+  const time = Cesium.JulianDate.now();
+  const byGid = new Map();
+  for (const entity of dataSource.entities.values) {
+    const gid = propertyValue(entity, GID_FIELD, time);
+    if (gid !== undefined && gid !== null && !byGid.has(String(gid))) byGid.set(String(gid), entity);
+  }
+  return points
+    .map((p) => ({ ...p, entity: byGid.get(p.id) || null }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function fillDropdown(select, items, placeholder) {
+  select.replaceChildren();
+  const ph = document.createElement("option");
+  ph.value = "";
+  ph.textContent = placeholder;
+  select.appendChild(ph);
+  for (const item of items) {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.name;
+    select.appendChild(option);
+  }
+}
 
 function populateRoutingDropdowns() {
-  const time = Cesium.JulianDate.now();
+  navigation.dashboards = buildItems(pointData.dashboards, dashboards);
+  navigation.entrances = buildItems(pointData.entrances, entrances);
 
-  navigation.dashboards = dashboards.entities.values
-    .map((entity, index) => ({
-      entity,
-      id: `screen-${index}`,
-      name: propertyValue(entity, "LCD Display Name", time) || propertyValue(entity, "Name", time) || `Display Screen ${index + 1}`,
-      position: getPointPosition(entity, time)
-    }))
-    .filter(item => item.position)
-    .sort((a, b) => a.name.localeCompare(b.name));
+  fillDropdown(startSelect, navigation.dashboards, "Select LCD Display Screen");
+  fillDropdown(endSelect, navigation.entrances, "Select Building Entrance");
 
-  navigation.entrances = entrances.entities.values
-    .map((entity, index) => ({
-      entity,
-      id: `entrance-${index}`,
-      name: propertyValue(entity, "Entrance Name", time) || propertyValue(entity, "Name", time) || `Entrance ${index + 1}`,
-      position: getPointPosition(entity, time)
-    }))
-    .filter(item => item.position)
-    .sort((a, b) => a.name.localeCompare(b.name));
+  let message = `${navigation.dashboards.length} screens & ${navigation.entrances.length} entrances loaded. Choose start screen and destination entrance.`;
+  if (failedLayers.length) message += ` (Failed to load: ${failedLayers.join(", ")}.)`;
+  setRouteStatus(message);
+}
 
-  startSelect.replaceChildren();
-  const startPlaceholder = document.createElement("option");
-  startPlaceholder.value = "";
-  startPlaceholder.textContent = "Select LCD Display Screen";
-  startSelect.appendChild(startPlaceholder);
-
-  for (const item of navigation.dashboards) {
-    const option = document.createElement("option");
-    option.value = item.id;
-    option.textContent = item.name;
-    startSelect.appendChild(option);
+function buildNetwork() {
+  if (!pathwaysJson) {
+    navigation.network = null;
+    return;
   }
-
-  endSelect.replaceChildren();
-  const endPlaceholder = document.createElement("option");
-  endPlaceholder.value = "";
-  endPlaceholder.textContent = "Select Building Entrance";
-  endSelect.appendChild(endPlaceholder);
-
-  for (const item of navigation.entrances) {
-    const option = document.createElement("option");
-    option.value = item.id;
-    option.textContent = item.name;
-    endSelect.appendChild(option);
-  }
-
-  routeStatus.textContent = `${navigation.dashboards.length} screens & ${navigation.entrances.length} entrances loaded. Choose start screen and destination entrance.`;
+  navigation.network = new PathRouter.PathNetwork(pathwaysJson, {
+    snapTolerance: ROUTING.snapTolerance,
+    maxSnapDistance: ROUTING.maxSnapDistance
+  });
 }
 
-function connectNodes(a, b) {
-  if (a.key === b.key) return;
-  const distance = Cesium.Cartesian3.distance(a.position, b.position);
-  if (!Number.isFinite(distance) || distance <= 0) return;
-  a.neighbors.set(b.key, distance);
-  b.neighbors.set(a.key, distance);
-}
-
-function heuristic(a, b) {
-  return Cesium.Cartesian3.distance(a.position, b.position);
-}
-
-const SNAP_TOLERANCE = 1.5;
-let graphOrigin = null;
-
-function toXY(position) {
-  const c = Cesium.Cartographic.fromCartesian(position);
-  return {
-    x: (c.longitude - graphOrigin.lon) * Math.cos(graphOrigin.lat) * 6378137,
-    y: (c.latitude - graphOrigin.lat) * 6378137
-  };
-}
-
-function segmentIntersectionT(a1, a2, b1, b2) {
-  const rx = a2.x - a1.x, ry = a2.y - a1.y;
-  const sx = b2.x - b1.x, sy = b2.y - b1.y;
-  const denom = rx * sy - ry * sx;
-  if (Math.abs(denom) < 1e-9) return null;
-  const qx = b1.x - a1.x, qy = b1.y - a1.y;
-  const t = (qx * sy - qy * sx) / denom;
-  const u = (qx * ry - qy * rx) / denom;
-  return (t >= 0 && t <= 1 && u >= 0 && u <= 1) ? t : null;
-}
-
-function projectOnSegment(p, a, b) {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const len2 = dx * dx + dy * dy;
-  if (len2 === 0) return { t: 0, dist: Math.hypot(p.x - a.x, p.y - a.y) };
-  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
-  t = Math.max(0, Math.min(1, t));
-  return { t, dist: Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)) };
-}
-
-function buildGraph() {
-  navigation.graph.clear();
-  navigation.nodes = [];
-  const time = Cesium.JulianDate.now();
-  const segments = [];
-
-  for (const entity of paths.entities.values) {
-    const positions = entity.polyline?.positions?.getValue(time);
-    if (!positions || positions.length < 2) continue;
-
-    if (!graphOrigin) {
-      const c = Cesium.Cartographic.fromCartesian(positions[0]);
-      graphOrigin = { lon: c.longitude, lat: c.latitude };
-    }
-
-    for (let i = 0; i < positions.length - 1; i++) {
-      segments.push({
-        a: positions[i],
-        b: positions[i + 1],
-        a2: toXY(positions[i]),
-        b2: toXY(positions[i + 1])
-      });
-    }
-  }
-
-  function getOrCreateNode(position) {
-    const xy = toXY(position);
-    for (const node of navigation.nodes) {
-      if (Math.hypot(node.xy.x - xy.x, node.xy.y - xy.y) <= SNAP_TOLERANCE) return node;
-    }
-    const node = { key: `n${navigation.nodes.length}`, position, xy, neighbors: new Map() };
-    navigation.graph.set(node.key, node);
-    navigation.nodes.push(node);
-    return node;
-  }
-
-  for (let i = 0; i < segments.length; i++) {
-    const s = segments[i];
-    const ts = [0, 1];
-    for (let j = 0; j < segments.length; j++) {
-      if (i === j) continue;
-      const o = segments[j];
-      const t = segmentIntersectionT(s.a2, s.b2, o.a2, o.b2);
-      if (t !== null) ts.push(t);
-      for (const end of [o.a2, o.b2]) {
-        const proj = projectOnSegment(end, s.a2, s.b2);
-        if (proj.dist <= SNAP_TOLERANCE && proj.t > 0 && proj.t < 1) ts.push(proj.t);
-      }
-    }
-    ts.sort((p, q) => p - q);
-    let prevNode = null;
-    for (const t of ts) {
-      const point = Cesium.Cartesian3.lerp(s.a, s.b, t, new Cesium.Cartesian3());
-      const node = getOrCreateNode(point);
-      if (prevNode) connectNodes(prevNode, node);
-      prevNode = node;
-    }
-  }
-}
-
-function snapToGraph(target) {
-  const p = toXY(target);
-  let best = null;
-  for (const node of navigation.nodes) {
-    for (const key of node.neighbors.keys()) {
-      if (node.key > key) continue;
-      const other = navigation.graph.get(key);
-      const proj = projectOnSegment(p, node.xy, other.xy);
-      if (!best || proj.dist < best.dist) best = { a: node, b: other, t: proj.t, dist: proj.dist };
-    }
-  }
-  if (!best) return null;
-  best.point = Cesium.Cartesian3.lerp(best.a.position, best.b.position, best.t, new Cesium.Cartesian3());
-  return best;
-}
-
-function link(a, b) {
-  const d = Math.max(Cesium.Cartesian3.distance(a.position, b.position), 1e-6);
-  a.neighbors.set(b.key, d);
-  b.neighbors.set(a.key, d);
-}
-
-function addVirtualNode(key, snap) {
-  const node = { key, position: snap.point, xy: toXY(snap.point), neighbors: new Map() };
-  navigation.graph.set(key, node);
-  link(node, snap.a);
-  link(node, snap.b);
-  return node;
-}
-
-function removeVirtualNode(node) {
-  for (const key of node.neighbors.keys()) {
-    navigation.graph.get(key)?.neighbors.delete(node.key);
-  }
-  navigation.graph.delete(node.key);
-}
-
-function sameEdge(s1, s2) {
-  return (s1.a === s2.a && s1.b === s2.b) || (s1.a === s2.b && s1.b === s2.a);
-}
-
-function calculateShortestPath(start, end) {
-  if (!start || !end) return null;
-  const gScore = new Map([[start.key, 0]]);
-  const fScore = new Map([[start.key, heuristic(start, end)]]);
-  const previous = new Map();
-  const openSet = new Set([start.key]);
-
-  while (openSet.size > 0) {
-    let currentKey = null;
-    let lowestF = Infinity;
-    for (const key of openSet) {
-      const score = fScore.get(key) ?? Infinity;
-      if (score < lowestF) {
-        lowestF = score;
-        currentKey = key;
-      }
-    }
-    if (currentKey === null) break;
-
-    if (currentKey === end.key) {
-      const route = [];
-      let k = currentKey;
-      while (k !== undefined) {
-        route.push(navigation.graph.get(k));
-        k = previous.get(k);
-      }
-      route.reverse();
-      return { nodes: route, distance: gScore.get(end.key) };
-    }
-
-    openSet.delete(currentKey);
-    const current = navigation.graph.get(currentKey);
-    for (const [neighborKey, edgeDistance] of current.neighbors) {
-      const tentative = gScore.get(currentKey) + edgeDistance;
-      if (tentative < (gScore.get(neighborKey) ?? Infinity)) {
-        previous.set(neighborKey, currentKey);
-        gScore.set(neighborKey, tentative);
-        fScore.set(neighborKey, tentative + heuristic(navigation.graph.get(neighborKey), end));
-        openSet.add(neighborKey);
-      }
-    }
-  }
-  return null;
-}
-
-/* ---------- QR Code Generator ---------- */
-
-const GEONEXUS_CFG = window.GEONEXUS || {};
-const qrBox = document.getElementById("qrBox");
-const qrTarget = document.getElementById("qrcode");
-const qrLink = document.getElementById("qrLink");
-const qrWarn = document.getElementById("qrWarn");
-
-function routePageUrl() {
-  const page = GEONEXUS_CFG.ROUTE_PAGE || "route.html";
-  if (GEONEXUS_CFG.PUBLIC_BASE_URL) {
-    return GEONEXUS_CFG.PUBLIC_BASE_URL.replace(/\/?$/, "/") + page;
-  }
-  return new URL(page, window.location.href).href;
-}
+/* ---------- QR Code ---------- */
 
 function hideQR() {
-  qrBox.hidden = true;
-  qrTarget.replaceChildren();
-  qrLink.textContent = "";
-  qrLink.removeAttribute("href");
-  qrWarn.hidden = true;
+  const qrBox = $("qrBox");
+  if (qrBox) qrBox.hidden = true;
+  const target = $("qrcode");
+  if (target) target.replaceChildren();
+  const link = $("qrLink");
+  if (link) {
+    link.textContent = "";
+    link.removeAttribute("href");
+  }
+  const warn = $("qrWarn");
+  if (warn) warn.hidden = true;
 }
 
 function showQR(startItem, endItem) {
   hideQR();
-  if (typeof QRCode === "undefined") return;
+  const qrBox = $("qrBox");
+  if (!qrBox) return;
 
-  const s = startItem.id.replace("screen-", "");
-  const d = endItem.id.replace("entrance-", "");
-  const url = `${routePageUrl()}?s=${encodeURIComponent(s)}&d=${encodeURIComponent(d)}`;
+  const url = PathRouter.buildRouteUrl(startItem.id, endItem.id);
 
-  new QRCode(qrTarget, {
-    text: url,
-    width: 200,
-    height: 200,
-    colorDark: "#000000",
-    colorLight: "#ffffff",
-    correctLevel: QRCode.CorrectLevel.M
-  });
+  const target = $("qrcode");
+  if (target && typeof QRCode !== "undefined") {
+    new QRCode(target, {
+      text: url,
+      width: 200,
+      height: 200,
+      colorDark: "#000000",
+      colorLight: "#ffffff",
+      correctLevel: QRCode.CorrectLevel.M
+    });
+  }
 
-  qrLink.href = url;
-  qrLink.textContent = url;
+  const link = $("qrLink");
+  if (link) {
+    link.href = url;
+    link.textContent = url;
+  }
+
+  // A QR pointing at localhost or file:// is useless from a phone.
+  const warn = $("qrWarn");
+  if (warn) warn.hidden = PathRouter.isShareableHost();
+
   qrBox.hidden = false;
 }
 
@@ -653,22 +624,49 @@ function clearRoute() {
   navigation.routeEntity = null;
   navigation.startMarker = null;
   navigation.endMarker = null;
+  navigation.startItem = null;
+  navigation.endItem = null;
   hideQR();
+}
+
+function routeMarker(name, item, color, prefix) {
+  return viewer.entities.add({
+    name,
+    position: Cesium.Cartesian3.fromDegrees(item.coordinates[0], item.coordinates[1]),
+    point: {
+      pixelSize: 16,
+      color,
+      outlineColor: Cesium.Color.WHITE,
+      outlineWidth: 3,
+      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY
+    },
+    label: {
+      text: `${prefix}: ${item.name}`,
+      font: "14px sans-serif",
+      fillColor: color,
+      outlineColor: Cesium.Color.BLACK,
+      outlineWidth: 4,
+      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      pixelOffset: new Cesium.Cartesian2(0, -25),
+      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY
+    }
+  });
 }
 
 function displayRoute(result, startItem, endItem) {
   clearRoute();
+  navigation.startItem = startItem;
+  navigation.endItem = endItem;
 
-  const positions = [
-    startItem.position,
-    ...result.nodes.map(node => node.position),
-    endItem.position
-  ];
+  const flat = [];
+  for (const [lng, lat] of result.coordinates) flat.push(lng, lat);
 
   navigation.routeEntity = viewer.entities.add({
     name: "Highlighted Campus Route",
     polyline: {
-      positions,
+      positions: Cesium.Cartesian3.fromDegreesArray(flat),
       width: 14,
       material: new Cesium.PolylineOutlineMaterialProperty({
         color: ROUTE_COLOR,
@@ -679,55 +677,13 @@ function displayRoute(result, startItem, endItem) {
     }
   });
 
-  navigation.startMarker = viewer.entities.add({
-    name: "Route Start",
-    position: startItem.position,
-    point: {
-      pixelSize: 16,
-      color: START_COLOR,
-      outlineColor: Cesium.Color.WHITE,
-      outlineWidth: 3,
-      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY
-    },
-    label: {
-      text: `START: ${startItem.name}`,
-      font: "14px sans-serif",
-      fillColor: START_COLOR,
-      outlineColor: Cesium.Color.BLACK,
-      outlineWidth: 4,
-      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-      pixelOffset: new Cesium.Cartesian2(0, -25),
-      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY
-    }
-  });
+  navigation.startMarker = routeMarker("Route Start", startItem, START_COLOR, "START");
+  navigation.endMarker = routeMarker("Route Destination", endItem, END_COLOR, "END");
 
-  navigation.endMarker = viewer.entities.add({
-    name: "Route Destination",
-    position: endItem.position,
-    point: {
-      pixelSize: 16,
-      color: END_COLOR,
-      outlineColor: Cesium.Color.WHITE,
-      outlineWidth: 3,
-      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY
-    },
-    label: {
-      text: `END: ${endItem.name}`,
-      font: "14px sans-serif",
-      fillColor: END_COLOR,
-      outlineColor: Cesium.Color.BLACK,
-      outlineWidth: 4,
-      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-      pixelOffset: new Cesium.Cartesian2(0, -25),
-      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-      disableDepthTestDistance: Number.POSITIVE_INFINITY
-    }
-  });
-
-  routeStatus.textContent = `Route found: ${startItem.name} → ${endItem.name}. Approximate pathway distance: ${result.distance.toFixed(1)} m.`;
+  const mins = Math.max(1, Math.round(result.distance / ROUTING.walkSpeed / 60));
+  setRouteStatus(
+    `Route found: ${startItem.name} → ${endItem.name}. Approximate walking distance: ${Math.round(result.distance)} m (≈ ${mins} min).`
+  );
   showQR(startItem, endItem);
 
   viewer.flyTo([navigation.routeEntity, navigation.startMarker, navigation.endMarker], {
@@ -737,86 +693,103 @@ function displayRoute(result, startItem, endItem) {
 }
 
 function findRoute() {
-  const start = navigation.dashboards.find(b => b.id === startSelect.value);
-  const end = navigation.entrances.find(b => b.id === endSelect.value);
+  const start = navigation.dashboards.find((b) => b.id === startSelect.value);
+  const end = navigation.entrances.find((b) => b.id === endSelect.value);
 
   if (!start || !end) {
-    routeStatus.textContent = "Please select both a start screen and a destination entrance.";
+    setRouteStatus("Please select both a start screen and a destination entrance.");
+    return;
+  }
+  if (!navigation.network) {
+    clearRoute();
+    setRouteStatus("The pathway network failed to load, so routes are unavailable.");
     return;
   }
 
-  const snapS = snapToGraph(start.position);
-  const snapE = snapToGraph(end.position);
-
-  if (!snapS || !snapE) {
+  let result;
+  try {
+    result = navigation.network.route(start.coordinates, end.coordinates, {
+      startLabel: "The start screen",
+      endLabel: "The destination entrance"
+    });
+  } catch (error) {
     clearRoute();
-    routeStatus.textContent = "Could not snap locations to pathway network.";
-    return;
-  }
-
-  const vStart = addVirtualNode("__start", snapS);
-  const vEnd = addVirtualNode("__end", snapE);
-  if (sameEdge(snapS, snapE)) link(vStart, vEnd);
-
-  const result = calculateShortestPath(vStart, vEnd);
-
-  removeVirtualNode(vStart);
-  removeVirtualNode(vEnd);
-
-  if (!result) {
-    clearRoute();
-    routeStatus.textContent = "No connected route found.";
+    setRouteStatus(error.message);
     return;
   }
 
   displayRoute(result, start, end);
 }
 
-document.getElementById("findRoute").onclick = findRoute;
-document.getElementById("resetRoute").onclick = () => {
-  clearRoute();
-  navigation.pickMode = null;
-  routeStatus.textContent = "Route cleared. Choose starting screen and destination entrance.";
-};
+/* ---------- Pick modes ---------- */
 
-startSelect.addEventListener("change", clearRoute);
-endSelect.addEventListener("change", clearRoute);
+function setPickMode(mode) {
+  navigation.pickMode = mode;
+  applyEntranceVisibility(); // entrances are revealed while picking an end point
+}
 
-document.getElementById("pickStart").onclick = () => {
-  navigation.pickMode = "start";
-  routeStatus.textContent = "Click a display screen model directly on the 3D map.";
-};
+function wireRoutingUi() {
+  on("findRoute", "click", findRoute);
+  on("resetRoute", "click", () => {
+    clearRoute();
+    setPickMode(null);
+    setRouteStatus("Route cleared. Choose starting screen and destination entrance.");
+  });
 
-document.getElementById("pickEnd").onclick = () => {
-  navigation.pickMode = "end";
-  routeStatus.textContent = "Click a building entrance point directly on the 3D map.";
-};
+  startSelect.addEventListener("change", clearRoute);
+  endSelect.addEventListener("change", clearRoute);
 
-const clickHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  on("pickStart", "click", () => {
+    setPickMode("start");
+    setRouteStatus("Click a display screen model directly on the 3D map (Esc to cancel).");
+  });
 
-clickHandler.setInputAction(click => {
-  if (!navigation.pickMode) return;
-  const picked = viewer.scene.pick(click.position);
-  const entity = picked?.id;
+  on("pickEnd", "click", () => {
+    setPickMode("end");
+    setRouteStatus("Click a building entrance point directly on the 3D map (Esc to cancel).");
+  });
 
-  if (navigation.pickMode === "start") {
-    const item = navigation.dashboards.find(d => d.entity === entity);
-    if (item) {
-      startSelect.value = item.id;
-      navigation.pickMode = null;
-      clearRoute();
-      routeStatus.textContent = `Selected start display screen: ${item.name}. Now select an entrance.`;
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && navigation.pickMode) {
+      setPickMode(null);
+      setRouteStatus("Selection cancelled.");
     }
-  } else if (navigation.pickMode === "end") {
-    const item = navigation.entrances.find(e => e.entity === entity);
-    if (item) {
-      endSelect.value = item.id;
-      navigation.pickMode = null;
-      clearRoute();
-      routeStatus.textContent = `Selected destination entrance: ${item.name}. Click Find Route.`;
-    }
-  }
-}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+  });
 
-populateRoutingDropdowns();
-buildGraph();
+  const clickHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  clickHandler.setInputAction((click) => {
+    if (!navigation.pickMode) return;
+    const picked = viewer.scene.pick(click.position);
+    const entity = picked?.id instanceof Cesium.Entity ? picked.id : null;
+    if (!entity) return;
+
+    const kind = kindOf(entity);
+    const gid = gidOf(entity);
+
+    if (navigation.pickMode === "start" && kind === "screen") {
+      const item = navigation.dashboards.find((d) => d.id === gid);
+      if (item) {
+        startSelect.value = item.id;
+        setPickMode(null);
+        clearRoute();
+        setRouteStatus(`Selected start display screen: ${item.name}. Now select an entrance.`);
+      }
+    } else if (navigation.pickMode === "end" && kind === "entrance") {
+      const item = navigation.entrances.find((e) => e.id === gid);
+      if (item) {
+        endSelect.value = item.id;
+        setPickMode(null);
+        clearRoute();
+        setRouteStatus(`Selected destination entrance: ${item.name}. Click Find Route.`);
+      }
+    }
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+}
+
+if (startSelect && endSelect) {
+  populateRoutingDropdowns();
+  buildNetwork();
+  wireRoutingUi();
+} else {
+  console.error("Routing UI skipped: #startBuilding and/or #endBuilding not found.");
+}
