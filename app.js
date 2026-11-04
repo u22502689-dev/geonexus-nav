@@ -11,6 +11,12 @@ const NAME_FIELDS = ["Name", "name", "NAME", "building_name", "building:name", "
 const METERS_PER_LEVEL = 3.5;
 const DEFAULT_HEIGHT = 10;
 
+// Entrance points are invisible by default. They stay in the scene (and stay
+// pickable), so the dropdown, routing, hover tooltip and "Pick End" still work.
+// The #tglEntrances checkbox (if present) switches them visible/invisible.
+const ENTRANCES_VISIBLE_BY_DEFAULT = false;
+const ENTRANCE_COLOR = Cesium.Color.fromCssColorString("#3b82f6");
+
 const terrainProvider = await Cesium.createWorldTerrainAsync();
 
 const viewer = new Cesium.Viewer("cesiumContainer", {
@@ -177,8 +183,8 @@ async function loadDashboardLocations() {
     entity.model = new Cesium.ModelGraphics({
       uri: "mapscreen.glb",
       scale: 1.0,
-      minimumPixelSize: 0,
-      maximumScale: 5,
+      minimumPixelSize: 20,
+      maximumScale: 50,
       heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
       shadows: Cesium.ShadowMode.ENABLED
     });
@@ -188,9 +194,19 @@ async function loadDashboardLocations() {
   return dataSource;
 }
 
+// Show or hide the entrance points visually. The data source itself always
+// stays "shown" so the entities remain pickable and usable for routing.
+function setEntrancesVisible(dataSource, visible) {
+  for (const entity of dataSource.entities.values) {
+    if (!entity.point) continue;
+    entity.point.color = visible ? ENTRANCE_COLOR : Cesium.Color.TRANSPARENT;
+    entity.point.outlineColor = visible ? Cesium.Color.WHITE : Cesium.Color.TRANSPARENT;
+    entity.point.outlineWidth = visible ? 2 : 0;
+  }
+}
+
 async function loadBuildingEntrances() {
   const dataSource = await Cesium.GeoJsonDataSource.load("building_entrances.geojson", { clampToGround: true });
-  const time = Cesium.JulianDate.now();
 
   for (const entity of dataSource.entities.values) {
     if (!entity.position) continue;
@@ -198,12 +214,14 @@ async function loadBuildingEntrances() {
     entity.billboard = undefined;
     entity.point = new Cesium.PointGraphics({
       pixelSize: 10,
-      color: Cesium.Color.fromCssColorString("#3b82f6"),
+      color: ENTRANCE_COLOR,
       outlineColor: Cesium.Color.WHITE,
       outlineWidth: 2,
       heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
     });
   }
+
+  setEntrancesVisible(dataSource, ENTRANCES_VISIBLE_BY_DEFAULT);
 
   await viewer.dataSources.add(dataSource);
   return dataSource;
@@ -234,7 +252,10 @@ const tglDashboards = document.getElementById("tglDashboards");
 if (tglDashboards) tglDashboards.onchange = event => { dashboards.show = event.target.checked; };
 
 const tglEntrances = document.getElementById("tglEntrances");
-if (tglEntrances) tglEntrances.onchange = event => { entrances.show = event.target.checked; };
+if (tglEntrances) {
+  tglEntrances.checked = ENTRANCES_VISIBLE_BY_DEFAULT; // keep checkbox in sync
+  tglEntrances.onchange = event => setEntrancesVisible(entrances, event.target.checked);
+}
 
 home();
 
