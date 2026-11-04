@@ -248,92 +248,9 @@ window.PathRouter = (function () {
       for (let cur = E; cur !== undefined; cur = prev.get(cur)) ids.push(cur);
       ids.reverse();
 
-      const rawPath = [from, ...ids.map(lonlatOf), to];
       // Ensure output is Leaflet format: [lat, lng]
-      const path = rawPath.map((c) => [c[1], c[0]]);
-      
-      // Calculate turn-by-turn directions
-      const instructions = this._generateInstructions(rawPath);
-
-      return { path, distance: dist.get(E), instructions };
-    }
-
-    _bearing(p1, p2) {
-      const xy1 = this._xy(p1);
-      const xy2 = this._xy(p2);
-      const angle = Math.atan2(xy2.x - xy1.x, xy2.y - xy1.y) * (180 / Math.PI);
-      return (angle + 360) % 360;
-    }
-
-    _generateInstructions(points) {
-      const pts = [];
-      for (const p of points) {
-        const last = pts[pts.length - 1];
-        if (!last || Math.hypot(this._xy(p).x - this._xy(last).x, this._xy(p).y - this._xy(last).y) > 0.5) pts.push(p);
-      }
-      points = pts;
-      if (points.length < 2) return [];
-
-      const steps = [];
-      steps.push({
-        type: "start",
-        text: "Head towards the pathway",
-        distance: Math.hypot(
-          this._xy(points[1]).x - this._xy(points[0]).x,
-          this._xy(points[1]).y - this._xy(points[0]).y
-        )
-      });
-
-      for (let i = 1; i < points.length - 1; i++) {
-        const b1 = this._bearing(points[i - 1], points[i]);
-        const b2 = this._bearing(points[i], points[i + 1]);
-
-        let turnAngle = (b2 - b1 + 360) % 360;
-        if (turnAngle > 180) turnAngle -= 360;
-
-        const segDist = Math.hypot(
-          this._xy(points[i + 1]).x - this._xy(points[i]).x,
-          this._xy(points[i + 1]).y - this._xy(points[i]).y
-        );
-
-        let turnType = "continue";
-        let turnText = "Continue straight";
-
-        if (turnAngle > 45 && turnAngle <= 135) {
-          turnType = "turn-right";
-          turnText = "Turn right";
-        } else if (turnAngle >= 135 || turnAngle <= -135) {
-          turnType = "u-turn";
-          turnText = "Make a U-turn";
-        } else if (turnAngle < -45 && turnAngle >= -135) {
-          turnType = "turn-left";
-          turnText = "Turn left";
-        } else if (turnAngle > 15 && turnAngle <= 45) {
-          turnType = "slight-right";
-          turnText = "Slight right";
-        } else if (turnAngle < -15 && turnAngle >= -45) {
-          turnType = "slight-left";
-          turnText = "Slight left";
-        }
-
-        if (turnType !== "continue" || i === points.length - 2) {
-          steps.push({
-            type: turnType,
-            text: turnText,
-            distance: segDist
-          });
-        } else {
-          steps[steps.length - 1].distance += segDist;
-        }
-      }
-
-      steps.push({
-        type: "destination",
-        text: "Arrive at your destination",
-        distance: 0
-      });
-
-      return steps;
+      const path = [from, ...ids.map(lonlatOf), to].map((c) => [c[1], c[0]]);
+      return { path, distance: dist.get(E) };
     }
   }
 
@@ -341,7 +258,10 @@ window.PathRouter = (function () {
 })();
 
 
-// GeoNexus 2D route page controller (screens -> entrances, live GPS, turn-by-turn). Needs Leaflet, config.js, routing.js first.
+// ==========================================
+// 2D MAP CONTROLLER & UI WITH LIVE GPS
+// ==========================================
+
 (function () {
   "use strict";
 
@@ -390,7 +310,6 @@ window.PathRouter = (function () {
   // Mobile Geolocation State
   let userCoords = null; // Stores latest [lng, lat]
   let watchId = null;
-  let gpsRouted = false; // only re-fit the map on the first GPS route
 
   function findItem(list, param) {
     if (param === null || param === undefined || param === "") return null;
@@ -445,77 +364,65 @@ window.PathRouter = (function () {
     history.replaceState(null, "", url.toString());
   }
 
-  function startLocationTracking(autoRouteTargetDest = null) {
-    if (!("geolocation" in navigator)) {
-      setStatus("Geolocation is not supported by your browser.", true);
-      return;
-    }
+ function startLocationTracking(isPassiveOverlay = false) {
+  if (!("geolocation" in navigator)) {
+    console.warn("Geolocation is not supported by this device/browser.");
+    return;
+  }
 
-    if (watchId !== null) return; // Already watching
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
 
-    setStatus("Acquiring GPS position...");
+  watchId = navigator.geolocation.watchPosition(
+    (position) => {
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+      const accuracy = position.coords.accuracy;
 
-    watchId = navigator.geolocation.watchPosition(
-      (position) => {
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-        const accuracy = position.coords.accuracy;
+      userCoords = [lng, lat];
+      layers.userLocation.clearLayers();
 
-        userCoords = [lng, lat];
-        layers.userLocation.clearLayers();
+      // Render GPS accuracy circle
+      L.circle([lat, lng], {
+        radius: accuracy,
+        color: "#3b82f6",
+        fillColor: "#3b82f6",
+        fillOpacity: 0.15,
+        weight: 1,
+        interactive: false
+      }).addTo(layers.userLocation);
 
-        // Accuracy radius blue circle
-        L.circle([lat, lng], {
-          radius: accuracy,
-          color: "#3b82f6",
-          fillColor: "#3b82f6",
-          fillOpacity: 0.15,
-          weight: 1,
-          interactive: false
-        }).addTo(layers.userLocation);
+      // Render live user location marker
+      L.circleMarker([lat, lng], {
+        radius: 8,
+        color: "#ffffff",
+        weight: 2,
+        fillColor: "#2563eb",
+        fillOpacity: 1
+      }).bindTooltip("You Are Here", { direction: "top", offset: [0, -10] })
+        .addTo(layers.userLocation);
 
-        // Marker for user position
-        L.circleMarker([lat, lng], {
-          radius: 8,
-          color: "#ffffff",
-          weight: 2,
-          fillColor: "#2563eb",
-          fillOpacity: 1
-        }).bindTooltip("Your Location", { direction: "top", offset: [0, -10] })
-          .addTo(layers.userLocation);
-
-        // Dynamic re-route if navigating from Current Location
+      // Only recalculate route origin if explicitly navigating in dynamic GPS mode
+      if (!isPassiveOverlay) {
         const startSelect = $("selStart");
         const endSelect = $("selDest");
-
-        if (startSelect && startSelect.value === GPS_START_ID) {
-          const dest = autoRouteTargetDest || (endSelect ? findItem(entrances, endSelect.value) : null);
+        if (startSelect && startSelect.value === GPS_START_ID && endSelect && endSelect.value) {
+          const dest = findItem(entrances, endSelect.value);
           if (dest) {
-            const userStart = {
-              id: GPS_START_ID,
-              name: "My Current Location",
-              coordinates: userCoords
-            };
-            showRoute(userStart, dest, { fit: !gpsRouted });
-            gpsRouted = true;
+            showRoute({ id: GPS_START_ID, name: "My Current Location", coordinates: userCoords }, dest);
           }
         }
-      },
-      (err) => {
-        const msgs = {
-          1: "Location permission denied.",
-          2: "GPS position unavailable.",
-          3: "GPS request timed out."
-        };
-        setStatus(msgs[err.code] || "Location tracking error.", true);
-      },
-      {
-        enableHighAccuracy: true,
-        maximumAge: 2000,
-        timeout: 10000
       }
-    );
-  }
+    },
+    (err) => {
+      console.warn("GPS overlay position error:", err);
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 2000,
+      timeout: 10000
+    }
+  );
+}
 
   function stopLocationTracking() {
     if (watchId !== null) {
@@ -524,40 +431,9 @@ window.PathRouter = (function () {
     }
     layers.userLocation.clearLayers();
     userCoords = null;
-    gpsRouted = false;
   }
 
-  const STEP_ICONS = { start: "🛫", "turn-left": "↰", "slight-left": "↖", "turn-right": "↱", "slight-right": "↗", "u-turn": "↶", destination: "📍" };
-
-  function renderDirections(steps) {
-    const list = $("directionsList"), box = $("directionsContainer");
-    if (!list) return;
-    list.replaceChildren();
-    if (!steps || !steps.length) { if (box) box.hidden = true; return; }
-    steps.forEach((step) => {
-      const li = document.createElement("li");
-      li.className = "step-item " + step.type;
-      const icon = document.createElement("span");
-      icon.className = "step-icon";
-      icon.textContent = STEP_ICONS[step.type] || "↑";
-      const details = document.createElement("div");
-      details.className = "step-details";
-      const text = document.createElement("strong");
-      text.textContent = step.text;
-      details.appendChild(text);
-      if (step.distance > 0) {
-        const d = document.createElement("small");
-        d.textContent = Math.round(step.distance) + " m";
-        details.appendChild(d);
-      }
-      li.appendChild(icon);
-      li.appendChild(details);
-      list.appendChild(li);
-    });
-    if (box) box.hidden = false;
-  }
-
-  function showRoute(start, dest, opts) {
+  function showRoute(start, dest) {
     layers.route.clearLayers();
 
     let r;
@@ -567,6 +443,16 @@ window.PathRouter = (function () {
       setStatus(err.message, true);
       return;
     }
+
+    // =========================================================
+    // ADD THIS BLOCK TO UPDATE YOUR DISPLAYED QR CODE:
+    // =========================================================
+    const qrUrl = window.GEONEXUS.getRouteUrl(dest.id, "USER_GPS_LOCATION");
+    const qrImageEl = $("qrCodeImage"); // Make sure your <img> tag has id="qrCodeImage"
+    if (qrImageEl) {
+      qrImageEl.src = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrUrl)}`;
+    }
+    // =========================================================
 
     const routeColor = ROUTING_CFG.ROUTE_COLOR || "#ec4899";
     const startColor = ROUTING_CFG.START_COLOR || "#22c55e";
@@ -586,7 +472,7 @@ window.PathRouter = (function () {
     dot(startLatLng, startColor, `START: ${start.name}`, "label-start");
     dot(destLatLng, destColor, `END: ${dest.name}`, "label-end");
 
-    if (!opts || opts.fit !== false) map.fitBounds(line.getBounds(), { padding: [50, 50] });
+    map.fitBounds(line.getBounds(), { padding: [50, 50] });
 
     const walkSpeed = ROUTING_CFG.WALK_SPEED_MS || 1.4;
     const mins = Math.max(1, Math.round(r.distance / walkSpeed / 60));
@@ -606,7 +492,6 @@ window.PathRouter = (function () {
       setURLParams(start.id, dest.id);
     }
     setStatus(`Route calculated: ${start.name} → ${dest.name}`);
-    renderDirections(r.instructions);
   }
 
   async function init() {
@@ -626,10 +511,6 @@ window.PathRouter = (function () {
       screens = PathRouter.extractPoints(sGeo, "LCD Display Name");
       entrances = PathRouter.extractPoints(eGeo, "Entrance Name");
       network = new PathRouter.PathNetwork(pGeo);
-      console.log("2D route:", screens.length, "screens,", entrances.length, "entrances,", network.nodes.length, "path nodes,", network.edges.length, "path edges");
-      if (!network.edges.length) throw new Error("No LineString pathways found in " + pathwaysUrl);
-      if (!screens.length) throw new Error("No Point features found in " + screensUrl + " (MultiPoint is not supported)");
-      if (!entrances.length) throw new Error("No Point features found in " + entrancesUrl + " (MultiPoint is not supported)");
 
       try {
         const bGeo = await fetchJSON(buildingsUrl);
@@ -692,15 +573,19 @@ window.PathRouter = (function () {
     }
 
     const params = new URLSearchParams(window.location.search);
-    if (params.has("s") && params.has("d")) {
-      const s = findItem(screens, params.get("s"));
-      const d = findItem(entrances, params.get("d"));
-      if (s && d) {
-        showRoute(s, d);
-      } else {
-        setStatus("Target display screen or building entrance point was not found.", true);
-      }
+  if (params.has("s") && params.has("d")) {
+    const s = findItem(screens, params.get("s"));
+    const d = findItem(entrances, params.get("d"));
+    if (s && d) {
+      // 1. Plot the route from the LCD screen to the entrance
+      showRoute(s, d);
+      
+      // 2. Automatically launch background GPS tracking to render the user's live position dot
+      startLocationTracking(true);
+    } else {
+      setStatus("Target display screen or building entrance point was not found.", true);
     }
+  }
   }
 
   const showRouteForm = $("routeForm");
@@ -758,7 +643,6 @@ window.PathRouter = (function () {
 
       endRouteBtn.hidden = true;
       setURLParams(null, null);
-      renderDirections(null);
       setStatus("Route cleared.");
     });
   }
